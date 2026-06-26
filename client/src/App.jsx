@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import './App.css';
 
-const SERVER_URL = 'http://localhost:3001';
+const SERVER_URL = 'https://compute-quest-server.onrender.com';
 
 function App() {
   const [connected, setConnected] = useState(false);
