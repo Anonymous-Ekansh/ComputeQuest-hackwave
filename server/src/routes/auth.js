@@ -1,11 +1,35 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
+const path = require('path');
 
 const router = express.Router();
 
-// in-memory user store (will be replaced with PostgreSQL later)
-const users = [];
+const usersFilePath = path.join(__dirname, '..', '..', 'data', 'users.json');
+
+function loadUsers() {
+  try {
+    if (fs.existsSync(usersFilePath)) {
+      const data = fs.readFileSync(usersFilePath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('Failed to load users:', err);
+  }
+  return [];
+}
+
+function saveUsers(usersData) {
+  try {
+    fs.writeFileSync(usersFilePath, JSON.stringify(usersData, null, 2));
+  } catch (err) {
+    console.error('Failed to save users:', err);
+  }
+}
+
+// file-based user store (will be replaced with PostgreSQL later)
+let users = loadUsers();
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET && process.env.NODE_ENV === 'production') {
@@ -43,6 +67,7 @@ router.post('/register', async (req, res) => {
       password: hashedPassword,
     };
     users.push(user);
+    saveUsers(users);
 
     const token = signToken(user);
     res.status(201).json({ token, username: user.username });

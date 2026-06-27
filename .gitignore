@@ -110,3 +110,6 @@ public
 *.sln
 *.sw?
 .DS_Store
+
+# User data file
+server/data/users.json
