@@ -11,15 +11,17 @@ const setupSocketHandler = require('./socketHandler');
 const app = express();
 const server = http.createServer(app);
 
+const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: clientOrigin,
     methods: ['GET', 'POST'],
   },
 });
 
 // middleware
-app.use(cors());
+app.use(cors({ origin: clientOrigin }));
 app.use(express.json());
 
 // routes

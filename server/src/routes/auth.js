@@ -7,11 +7,17 @@ const router = express.Router();
 // in-memory user store (will be replaced with PostgreSQL later)
 const users = [];
 
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET && process.env.NODE_ENV === 'production') {
+  throw new Error('FATAL ERROR: JWT_SECRET environment variable is not defined in production!');
+}
+const jwtSecretKey = JWT_SECRET || 'computequest-dev-secret-change-me';
+
 // generate a JWT for a user
 function signToken(user) {
   return jwt.sign(
     { id: user.id, username: user.username },
-    process.env.JWT_SECRET,
+    jwtSecretKey,
     { expiresIn: '24h' }
   );
 }
