@@ -1,31 +1,39 @@
-// Web Worker for matrix multiplication
-// Runs in a separate thread so the UI stays responsive
+// Web Worker for distributed matrix multiplication
+// Receives a CHUNK of rows from matrix A and the full matrix B,
+// computes only the assigned rows, and returns them with timing info.
 
 self.onmessage = function (e) {
-  const { taskId, matrixA, matrixB, size } = e.data;
+  const { taskId, chunkId, chunkData, startRow, rowCount, totalRows } = e.data;
+  const { rowsA, matrixB } = chunkData;
 
-  const startTime = performance.now();
+  const cols = matrixB[0].length;
+  const inner = matrixB.length; // shared dimension (columns of A / rows of B)
 
-  // standard matrix multiplication — O(n^3), intentionally blocking
-  const result = [];
-  for (let i = 0; i < size; i++) {
-    result[i] = [];
-    for (let j = 0; j < size; j++) {
+  const startTime = Date.now();
+
+  // multiply only the rows assigned to this node
+  const resultRows = [];
+  for (let i = 0; i < rowsA.length; i++) {
+    const row = [];
+    for (let j = 0; j < cols; j++) {
       let sum = 0;
-      for (let k = 0; k < size; k++) {
-        sum += matrixA[i][k] * matrixB[k][j];
+      for (let k = 0; k < inner; k++) {
+        sum += rowsA[i][k] * matrixB[k][j];
       }
-      result[i][j] = sum;
+      row.push(sum);
     }
+    resultRows.push(row);
   }
 
-  const elapsed = performance.now() - startTime;
+  const computeMs = Date.now() - startTime;
 
   self.postMessage({
     taskId,
-    matrixA,
-    matrixB,
-    result,
-    computeTimeMs: elapsed.toFixed(2),
+    chunkId,
+    resultRows,
+    computeMs,
+    startRow,
+    rowCount,
+    totalRows,
   });
 };

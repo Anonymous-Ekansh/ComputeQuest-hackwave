@@ -45,30 +45,36 @@ function App() {
     );
     workerRef.current = worker;
 
-    // when server sends a task, forward it to the worker
+    // when server sends a chunk, forward it to the worker
     socket.on('task_chunk', (chunk) => {
-      addLog(`Received task ${chunk.taskId} (${chunk.size}×${chunk.size} matrix multiply)`);
+      addLog(`Received chunk ${chunk.chunkId} — rows ${chunk.startRow}–${chunk.startRow + chunk.rowCount - 1} of ${chunk.totalRows}`);
       worker.postMessage(chunk);
     });
 
-    // when worker finishes, send result back to server
+    // when worker finishes a chunk, send result back to server
     worker.onmessage = (e) => {
-      const { taskId, result, matrixA, matrixB, computeTimeMs } = e.data;
+      const { taskId, chunkId, resultRows, computeMs, startRow, rowCount, totalRows } = e.data;
       setTasksCompleted(prev => prev + 1);
-      setLastResult({ taskId, result, matrixA, matrixB, computeTimeMs });
-      addLog(`Completed ${taskId} in ${computeTimeMs}ms`);
+      addLog(`Computed chunk ${chunkId} (${rowCount} rows) in ${computeMs}ms`);
 
-      // Log to browser console so developers can inspect
-      console.log(`%c[ComputeQuest] Solved ${taskId}`, 'color: #818cf8; font-weight: bold;');
-      console.log('Matrix A:');
-      console.table(matrixA);
-      console.log('Matrix B:');
-      console.table(matrixB);
-      console.log('Result:');
-      console.table(result);
+      console.log(`%c[ComputeQuest] Chunk ${chunkId} done`, 'color: #818cf8; font-weight: bold;');
+      console.log('Result rows:', resultRows);
 
-      socket.emit('chunk_result', { taskId, result });
+      socket.emit('chunk_result', { taskId, chunkId, resultRows, computeMs });
     };
+
+    // when the server has reassembled all chunks, show the full result
+    socket.on('task:complete', (data) => {
+      const { taskId, matrixA, matrixB, result, totalTimeMs, contributions } = data;
+      setLastResult({ taskId, result, matrixA, matrixB, computeTimeMs: totalTimeMs });
+      addLog(`Task ${taskId} complete in ${totalTimeMs}ms — ${contributions.length} node(s) contributed`);
+
+      console.log(`%c[ComputeQuest] Task ${taskId} fully assembled`, 'color: #34d399; font-weight: bold;');
+      console.log('Matrix A:'); console.table(matrixA);
+      console.log('Matrix B:'); console.table(matrixB);
+      console.log('Result:');   console.table(result);
+      console.log('Contributions:', contributions);
+    });
 
     // cleanup on unmount
     return () => {
