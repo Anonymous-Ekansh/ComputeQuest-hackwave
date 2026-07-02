@@ -1,7 +1,7 @@
 const { MATRIX_SIZE, TASK_TYPES } = require('../../shared/constants');
 const fs = require('fs');
 const path = require('path');
-const { Pool } = require('pg');
+
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -12,42 +12,29 @@ const SPOT_CHECK_COUNT = 2;              // random cells to verify after reassem
 
 const usersFilePath = path.join(__dirname, '..', 'data', 'users.json');
 
-// ── database connection (Supabase PostgreSQL / JSON Fallback) ──────────────────
+const { createClient } = require('@supabase/supabase-js');
 
-let pool = null;
-const dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
+// ── database connection (Supabase REST API / JSON Fallback) ──────────────────
 
-if (dbUrl) {
-  pool = new Pool({
-    connectionString: dbUrl,
-    ssl: { rejectUnauthorized: false }
-  });
+let supabase = null;
+const supabaseUrl = process.env.SUPABASE_URL || 'https://wammblbodauhydrlwfwt.supabase.co';
+const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhbW1ibGJvZGF1aHlkcmx3Znd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMDU5MDMsImV4cCI6MjA5ODU4MTkwM30.IDLDnCvaFcWwthdP_O2zBM6usrwduJLdkWq5qz5QhNY';
 
-  // Automatically initialize table on startup
-  pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id VARCHAR(255) PRIMARY KEY,
-      username VARCHAR(255) NOT NULL,
-      credits INTEGER DEFAULT 0 NOT NULL,
-      total_contributed INTEGER DEFAULT 0 NOT NULL
-    );
-  `).then(() => {
-    console.log('[db] PostgreSQL/Supabase table ready');
-    // Auto-migrate to add total_contributed if table already existed
-    pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total_contributed INTEGER DEFAULT 0 NOT NULL;`)
-      .catch(err => { /* might fail if already exists on older pg versions, safe to ignore */ });
-  }).catch(err => {
-    console.error('[db] Error initializing table:', err);
-  });
+if (supabaseUrl && supabaseKey) {
+  supabase = createClient(supabaseUrl, supabaseKey);
+  console.log('[db] Supabase REST client initialized');
+} else {
+  console.warn('[db] Missing SUPABASE_URL or SUPABASE_ANON_KEY. Falling back to local users.json');
 }
 
 async function loadUsers() {
-  if (pool) {
+  if (supabase) {
     try {
-      const res = await pool.query('SELECT id, username, credits, total_contributed FROM users');
-      return res.rows;
+      const { data, error } = await supabase.from('users').select('id, username, credits, total_contributed');
+      if (error) throw error;
+      return data || [];
     } catch (err) {
-      console.error('[db] PostgreSQL read error:', err);
+      console.error('[db] Supabase read error:', err.message || err);
       return [];
     }
   }
@@ -64,18 +51,22 @@ async function loadUsers() {
 }
 
 async function saveUsers(usersData) {
-  if (pool) {
+  if (supabase) {
     try {
-      for (const user of usersData) {
-        await pool.query(`
-          INSERT INTO users (id, username, credits, total_contributed)
-          VALUES ($1, $2, $3, $4)
-          ON CONFLICT (id) DO UPDATE
-          SET username = EXCLUDED.username, credits = EXCLUDED.credits, total_contributed = EXCLUDED.total_contributed
-        `, [user.id, user.username, user.credits, user.total_contributed || 0]);
-      }
+      // Upsert all users into Supabase
+      const { error } = await supabase.from('users').upsert(
+        usersData.map(u => ({
+          id: u.id,
+          username: u.username,
+          credits: u.credits,
+          total_contributed: u.total_contributed || 0
+        })),
+        { onConflict: 'id' }
+      );
+      
+      if (error) throw error;
     } catch (err) {
-      console.error('[db] PostgreSQL write error:', err);
+      console.error('[db] Supabase write error:', err.message || err);
     }
     return;
   }
