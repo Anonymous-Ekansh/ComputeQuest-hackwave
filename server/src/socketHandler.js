@@ -618,56 +618,70 @@ function setupSocketHandler(io) {
   io.on('connection', async (socket) => {
     // ── authenticate socket handshake ──
     let user = null;
-    if (socket.handshake.auth && socket.handshake.auth.session) {
-      const session = socket.handshake.auth.session;
-      if (session && session.user) {
-        const userId = session.user.id;
-        const usersList = await loadUsers();
+    if (socket.handshake.auth && socket.handshake.auth.token) {
+      const token = socket.handshake.auth.token;
+      try {
+        const { OAuth2Client } = require('google-auth-library');
+        const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '88447063157-ouco5qlke73cdffrvi88e2mc3f65i65s.apps.googleusercontent.com';
+        const client = new OAuth2Client(GOOGLE_CLIENT_ID);
         
-        // 1. Look up user by Google ID
-        let dbUser = usersList.find(u => u.id === userId);
+        const ticket = await client.verifyIdToken({
+            idToken: token,
+            audience: GOOGLE_CLIENT_ID,
+        });
+        const payload = ticket.getPayload();
         
-        // 2. Resolve User ID Migration: If not found by Google ID, match by email/username prefix
-        if (!dbUser) {
-          const googleEmail = session.user.email;
-          const googleName = session.user.name;
+        if (payload) {
+          const userId = payload.sub; // Google ID
+          const googleEmail = payload.email;
+          const googleName = payload.name;
           
-          dbUser = usersList.find(u => {
-            if (!u.username) return false;
-            const uname = u.username.toLowerCase();
-            return (
-              (googleEmail && (uname === googleEmail.toLowerCase() || googleEmail.toLowerCase().startsWith(uname + '@'))) ||
-              (googleName && uname === googleName.toLowerCase())
-            );
-          });
+          const usersList = await loadUsers();
           
-          if (dbUser) {
-            console.log(`[migration] Linked existing account '${dbUser.username}' (credits: ${dbUser.credits}) to Google ID ${userId}`);
-            dbUser.id = userId; // Update ID to Google ID
-            // Sync username with Google profile
-            dbUser.username = googleName || googleEmail || dbUser.username;
-            await saveUsers(usersList);
+          // 1. Look up user by Google ID
+          let dbUser = usersList.find(u => u.id === userId);
+          
+          // 2. Resolve User ID Migration: If not found by Google ID, match by email/username prefix
+          if (!dbUser) {
+            dbUser = usersList.find(u => {
+              if (!u.username) return false;
+              const uname = u.username.toLowerCase();
+              return (
+                (googleEmail && (uname === googleEmail.toLowerCase() || googleEmail.toLowerCase().startsWith(uname + '@'))) ||
+                (googleName && uname === googleName.toLowerCase())
+              );
+            });
+            
+            if (dbUser) {
+              console.log(`[migration] Linked existing account '${dbUser.username}' (credits: ${dbUser.credits}) to Google ID ${userId}`);
+              dbUser.id = userId; // Update ID to Google ID
+              // Sync username with Google profile
+              dbUser.username = googleName || googleEmail || dbUser.username;
+              await saveUsers(usersList);
+            }
           }
-        }
 
-        // 3. Fallback: Create new user if no match found
-        if (!dbUser) {
-          dbUser = {
-            id: userId,
-            username: session.user.name || session.user.email || 'Google User',
-            credits: 0
+          // 3. Fallback: Create new user if no match found
+          if (!dbUser) {
+            dbUser = {
+              id: userId,
+              username: googleName || googleEmail || 'Google User',
+              credits: 0
+            };
+            usersList.push(dbUser);
+            await saveUsers(usersList);
+            console.log(`[auth] Created new Google User ${dbUser.username} with ID ${userId}`);
+          }
+
+          user = {
+            id: dbUser.id,
+            username: dbUser.username,
+            credits: dbUser.credits || 0
           };
-          usersList.push(dbUser);
-          await saveUsers(usersList);
-          console.log(`[auth] Created new Google User ${dbUser.username} with ID ${userId}`);
+          console.log(`[auth] Google User ${dbUser.username} connected on socket ${socket.id}`);
         }
-
-        user = {
-          id: dbUser.id,
-          username: dbUser.username,
-          credits: dbUser.credits || 0
-        };
-        console.log(`[auth] Google User ${dbUser.username} connected on socket ${socket.id}`);
+      } catch (err) {
+        console.error('[auth] Google JWT verification failed:', err.message);
       }
     }
 

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import WorkerManager from './WorkerManager';
 import './App.css';
 
-const SERVER_URL = 'https://compute-quest-server.onrender.com';
+const SERVER_URL = 'http://localhost:3001'; // Fallback for local, we will use the actual domain if deployed, or keep dynamic if we want
 
 function App() {
   const [connected, setConnected] = useState(false);
@@ -18,6 +19,8 @@ function App() {
     credits: 0,
     isAuthenticated: false,
   });
+  
+  const [authToken, setAuthToken] = useState(localStorage.getItem('cq_auth_token') || null);
 
   // Progress states
   const [taskProgress, setTaskProgress] = useState(null);
@@ -30,14 +33,35 @@ function App() {
   }
 
   // Handle Google Login and Signout
-  const handleGoogleSignIn = () => {
-    addLog('Redirecting to Google Sign-in...');
-    window.location.href = '/login';
+  const handleGoogleSuccess = (credentialResponse) => {
+    const token = credentialResponse.credential;
+    setAuthToken(token);
+    localStorage.setItem('cq_auth_token', token);
+    addLog('Google sign-in successful. Reconnecting...');
+    
+    // Reconnect socket with the new token
+    if (socketRef.current) {
+      socketRef.current.auth = { token };
+      socketRef.current.disconnect().connect();
+    }
   };
 
   const handleLogout = () => {
-    addLog('Redirecting to Sign-out...');
-    window.location.href = '/api/auth/signout';
+    googleLogout();
+    setAuthToken(null);
+    localStorage.removeItem('cq_auth_token');
+    setUserInfo({
+      username: 'Anonymous Node',
+      credits: 0,
+      isAuthenticated: false,
+    });
+    addLog('Signed out. Reconnecting anonymously...');
+    
+    // Reconnect socket anonymously
+    if (socketRef.current) {
+      socketRef.current.auth = { token: null };
+      socketRef.current.disconnect().connect();
+    }
   };
 
   useEffect(() => {
@@ -46,24 +70,11 @@ function App() {
 
     let socket;
 
-    const initSocket = async () => {
-      // connect to server with NextAuth session if present
-      let session = null;
-      try {
-        const res = await fetch('/api/auth/session');
-        if (res.ok) {
-          const sessionData = await res.json();
-          // NextAuth returns empty object if no session exists
-          if (sessionData && Object.keys(sessionData).length > 0) {
-            session = sessionData;
-          }
-        }
-      } catch (err) {
-        console.warn('NextAuth session check skipped or failed:', err);
-      }
-
-      socket = io(SERVER_URL, {
-        auth: { session },
+    const initSocket = () => {
+      // Connect to server, passing token if we have one
+      const serverUrl = import.meta.env.VITE_SERVER_URL || SERVER_URL;
+      socket = io(serverUrl, {
+        auth: { token: authToken },
       });
       socketRef.current = socket;
 
@@ -137,7 +148,9 @@ function App() {
         socket.disconnect();
       }
     };
+    // Note: intentionally only running on mount. authToken changes are handled by disconnect().connect() in the success/logout handlers.
   }, []);
+
 
   return (
     <div className="app">
@@ -159,10 +172,11 @@ function App() {
         ) : (
           <div className="auth-fields">
             <h3>Persist Credits (Google Account)</h3>
-            <div className="auth-row">
-              <button className="auth-btn" style={{ width: '100%' }} onClick={handleGoogleSignIn}>
-                Sign in with Google
-              </button>
+            <div className="auth-row" style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
+              <GoogleLogin
+                onSuccess={handleGoogleSuccess}
+                onError={() => addLog('Google Login Failed')}
+              />
             </div>
           </div>
         )}
