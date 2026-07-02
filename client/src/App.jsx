@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
+import WorkerManager from './WorkerManager';
 import './App.css';
 
 const SERVER_URL = 'https://compute-quest-server.onrender.com';
@@ -12,7 +13,6 @@ function App() {
   const [log, setLog] = useState([]);
 
   const socketRef = useRef(null);
-  const workerRef = useRef(null);
 
   // helper to add a log entry
   function addLog(msg) {
@@ -20,6 +20,9 @@ function App() {
   }
 
   useEffect(() => {
+    // ── persistent worker (singleton — never terminated between chunks) ──
+    const workerManager = WorkerManager.getInstance();
+
     // connect to server
     const socket = io(SERVER_URL);
     socketRef.current = socket;
@@ -38,22 +41,15 @@ function App() {
       setNodeCount(count);
     });
 
-    // spin up the web worker
-    const worker = new Worker(
-      new URL('./workers/computeWorker.js', import.meta.url),
-      { type: 'module' }
-    );
-    workerRef.current = worker;
-
-    // when server sends a chunk, forward it to the worker
+    // when server sends a chunk, queue it through the WorkerManager
     socket.on('task_chunk', (chunk) => {
       addLog(`Received chunk ${chunk.chunkId} — rows ${chunk.startRow}–${chunk.startRow + chunk.rowCount - 1} of ${chunk.totalRows}`);
-      worker.postMessage(chunk);
+      workerManager.sendChunk(chunk);
     });
 
-    // when worker finishes a chunk, send result back to server
-    worker.onmessage = (e) => {
-      const { taskId, chunkId, resultRows, computeMs, startRow, rowCount, totalRows } = e.data;
+    // when the worker finishes a chunk, send the result back to the server
+    workerManager.onResult((data) => {
+      const { taskId, chunkId, resultRows, computeMs, startRow, rowCount, totalRows } = data;
       setTasksCompleted(prev => prev + 1);
       addLog(`Computed chunk ${chunkId} (${rowCount} rows) in ${computeMs}ms`);
 
@@ -61,7 +57,7 @@ function App() {
       console.log('Result rows:', resultRows);
 
       socket.emit('chunk_result', { taskId, chunkId, resultRows, computeMs });
-    };
+    });
 
     // when the server has reassembled all chunks, show the full result
     socket.on('task:complete', (data) => {
@@ -76,10 +72,9 @@ function App() {
       console.log('Contributions:', contributions);
     });
 
-    // cleanup on unmount
+    // cleanup: disconnect socket only — worker stays alive (managed by WorkerManager)
     return () => {
       socket.disconnect();
-      worker.terminate();
     };
   }, []);
 
