@@ -18,9 +18,6 @@ function App() {
     credits: 0,
     isAuthenticated: false,
   });
-  const [usernameInput, setUsernameInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [authError, setAuthError] = useState('');
 
   // Progress states
   const [taskProgress, setTaskProgress] = useState(null);
@@ -32,131 +29,113 @@ function App() {
     setLog(prev => [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] ${msg}`]);
   }
 
-  // Handle Login and Register
-  const handleAuth = async (action) => {
-    setAuthError('');
-    if (!usernameInput || !passwordInput) {
-      setAuthError('Username and password are required');
-      return;
-    }
-    try {
-      const response = await fetch(`${SERVER_URL}/api/auth/${action}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: usernameInput, password: passwordInput }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setAuthError(data.error || 'Authentication failed');
-        return;
-      }
-
-      localStorage.setItem('token', data.token);
-      addLog(`Authenticated as ${data.username}`);
-
-      // Clear input fields
-      setUsernameInput('');
-      setPasswordInput('');
-
-      // Reconnect socket with new token
-      if (socketRef.current) {
-        socketRef.current.auth = { token: data.token };
-        socketRef.current.disconnect().connect();
-      }
-    } catch (err) {
-      setAuthError('Authentication server unreachable');
-    }
+  // Handle Google Login and Signout
+  const handleGoogleSignIn = () => {
+    addLog('Redirecting to Google Sign-in...');
+    window.location.href = '/login';
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    setUserInfo({
-      username: 'Anonymous Node',
-      credits: 0,
-      isAuthenticated: false,
-    });
-    addLog('Logged out — back to anonymous contribution');
-    if (socketRef.current) {
-      socketRef.current.auth = { token: null };
-      socketRef.current.disconnect().connect();
-    }
+    addLog('Redirecting to Sign-out...');
+    window.location.href = '/api/auth/signout';
   };
 
   useEffect(() => {
     // ── persistent worker (singleton — never terminated between chunks) ──
     const workerManager = WorkerManager.getInstance();
 
-    // connect to server with JWT auth if present
-    const token = localStorage.getItem('token');
-    const socket = io(SERVER_URL, {
-      auth: { token },
-    });
-    socketRef.current = socket;
+    let socket;
 
-    socket.on('connect', () => {
-      setConnected(true);
-      addLog('Connected to server');
-    });
+    const initSocket = async () => {
+      // connect to server with NextAuth session if present
+      let session = null;
+      try {
+        const res = await fetch('/api/auth/session');
+        if (res.ok) {
+          const sessionData = await res.json();
+          // NextAuth returns empty object if no session exists
+          if (sessionData && Object.keys(sessionData).length > 0) {
+            session = sessionData;
+          }
+        }
+      } catch (err) {
+        console.warn('NextAuth session check skipped or failed:', err);
+      }
 
-    socket.on('disconnect', () => {
-      setConnected(false);
-      addLog('Disconnected from server');
-    });
+      socket = io(SERVER_URL, {
+        auth: { session },
+      });
+      socketRef.current = socket;
 
-    socket.on('node_count', (count) => {
-      setNodeCount(count);
-    });
+      socket.on('connect', () => {
+        setConnected(true);
+        addLog('Connected to server');
+      });
 
-    // listen for user/credit updates from server
-    socket.on('user_info', (info) => {
-      setUserInfo(info);
-    });
+      socket.on('disconnect', () => {
+        setConnected(false);
+        addLog('Disconnected from server');
+      });
 
-    // listen for task:progress events
-    socket.on('task:progress', (progress) => {
-      setTaskProgress(progress);
-    });
+      socket.on('node_count', (count) => {
+        setNodeCount(count);
+      });
 
-    // when server sends a chunk, queue it through the WorkerManager
-    socket.on('task_chunk', (chunk) => {
-      addLog(`Received chunk ${chunk.chunkId} — rows ${chunk.startRow}–${chunk.startRow + chunk.rowCount - 1} of ${chunk.totalRows}`);
-      workerManager.sendChunk(chunk);
-    });
+      // listen for user/credit updates from server
+      socket.on('user_info', (info) => {
+        setUserInfo(info);
+      });
 
-    // when the worker finishes a chunk, send the result back to the server
-    workerManager.onResult((data) => {
-      const { taskId, chunkId, resultRows, computeMs, startRow, rowCount, totalRows } = data;
-      setTasksCompleted(prev => prev + 1);
-      addLog(`Computed chunk ${chunkId} (${rowCount} rows) in ${computeMs}ms`);
+      // listen for task:progress events
+      socket.on('task:progress', (progress) => {
+        setTaskProgress(progress);
+      });
 
-      console.log(`%c[ComputeQuest] Chunk ${chunkId} done`, 'color: #818cf8; font-weight: bold;');
-      console.log('Result rows:', resultRows);
+      // when server sends a chunk, queue it through the WorkerManager
+      socket.on('task_chunk', (chunk) => {
+        addLog(`Received chunk ${chunk.chunkId} — rows ${chunk.startRow}–${chunk.startRow + chunk.rowCount - 1} of ${chunk.totalRows}`);
+        workerManager.sendChunk(chunk);
+      });
 
-      socket.emit('chunk_result', { taskId, chunkId, resultRows, computeMs });
-    });
+      // when the worker finishes a chunk, send the result back to the server
+      workerManager.onResult((data) => {
+        const { taskId, chunkId, resultRows, computeMs, startRow, rowCount, totalRows } = data;
+        setTasksCompleted(prev => prev + 1);
+        addLog(`Computed chunk ${chunkId} (${rowCount} rows) in ${computeMs}ms`);
 
-    // when the server has reassembled all chunks, show the full result
-    socket.on('task:complete', (data) => {
-      const { taskId, matrixA, matrixB, result, totalTimeMs, contributions } = data;
-      setLastResult({ taskId, result, matrixA, matrixB, computeTimeMs: totalTimeMs });
-      setTaskProgress(null); // clear progress
-      addLog(`Task ${taskId} complete in ${totalTimeMs}ms — ${contributions.length} node(s) contributed`);
+        console.log(`%c[ComputeQuest] Chunk ${chunkId} done`, 'color: #818cf8; font-weight: bold;');
+        console.log('Result rows:', resultRows);
 
-      console.log(`%c[ComputeQuest] Task ${taskId} fully assembled`, 'color: #34d399; font-weight: bold;');
-      console.log('Matrix A:'); console.table(matrixA);
-      console.log('Matrix B:'); console.table(matrixB);
-      console.log('Result:');   console.table(result);
-      console.log('Contributions:', contributions);
-    });
+        socket.emit('chunk_result', { taskId, chunkId, resultRows, computeMs });
+      });
 
-    socket.on('task:failed', (data) => {
-      addLog(`Task failed: ${data.reason}`);
-      setTaskProgress(null); // clear progress
-    });
+      // when the server has reassembled all chunks, show the full result
+      socket.on('task:complete', (data) => {
+        const { taskId, matrixA, matrixB, result, totalTimeMs, contributions } = data;
+        setLastResult({ taskId, result, matrixA, matrixB, computeTimeMs: totalTimeMs });
+        setTaskProgress(null); // clear progress
+        addLog(`Task ${taskId} complete in ${totalTimeMs}ms — ${contributions.length} node(s) contributed`);
+
+        console.log(`%c[ComputeQuest] Task ${taskId} fully assembled`, 'color: #34d399; font-weight: bold;');
+        console.log('Matrix A:'); console.table(matrixA);
+        console.log('Matrix B:'); console.table(matrixB);
+        console.log('Result:');   console.table(result);
+        console.log('Contributions:', contributions);
+      });
+
+      socket.on('task:failed', (data) => {
+        addLog(`Task failed: ${data.reason}`);
+        setTaskProgress(null); // clear progress
+      });
+    };
+
+    initSocket();
 
     // cleanup: disconnect socket only — worker stays alive (managed by WorkerManager)
     return () => {
-      socket.disconnect();
+      if (socket) {
+        socket.disconnect();
+      }
     };
   }, []);
 
@@ -179,26 +158,12 @@ function App() {
           </div>
         ) : (
           <div className="auth-fields">
-            <h3>Persist Credits (Login / Register)</h3>
+            <h3>Persist Credits (Google Account)</h3>
             <div className="auth-row">
-              <input
-                type="text"
-                placeholder="Username"
-                className="auth-input"
-                value={usernameInput}
-                onChange={(e) => setUsernameInput(e.target.value)}
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                className="auth-input"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-              />
-              <button className="auth-btn" onClick={() => handleAuth('login')}>Login</button>
-              <button className="auth-btn secondary" onClick={() => handleAuth('register')}>Register</button>
+              <button className="auth-btn" style={{ width: '100%' }} onClick={handleGoogleSignIn}>
+                Sign in with Google
+              </button>
             </div>
-            {authError && <div className="auth-error">{authError}</div>}
           </div>
         )}
       </div>

@@ -1,7 +1,7 @@
 const { MATRIX_SIZE, TASK_TYPES } = require('../../shared/constants');
-const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const path = require('path');
+const { Pool } = require('pg');
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -10,9 +10,82 @@ const MAX_CHUNK_RETRIES = 3;             // per-chunk retry cap before task:fail
 const DEADLINE_SCAN_INTERVAL_MS = 2_000; // how often we scan for overdue chunks
 const SPOT_CHECK_COUNT = 2;              // random cells to verify after reassembly
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const jwtSecretKey = JWT_SECRET || 'computequest-dev-secret-change-me';
 const usersFilePath = path.join(__dirname, '..', 'data', 'users.json');
+
+// ── database connection (Supabase PostgreSQL / JSON Fallback) ──────────────────
+
+let pool = null;
+const dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
+
+if (dbUrl) {
+  pool = new Pool({
+    connectionString: dbUrl,
+    ssl: { rejectUnauthorized: false }
+  });
+
+  // Automatically initialize table on startup
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id VARCHAR(255) PRIMARY KEY,
+      username VARCHAR(255) NOT NULL,
+      credits INTEGER DEFAULT 0 NOT NULL
+    );
+  `).then(() => {
+    console.log('[db] PostgreSQL/Supabase table ready');
+  }).catch(err => {
+    console.error('[db] Error initializing table:', err);
+  });
+}
+
+async function loadUsers() {
+  if (pool) {
+    try {
+      const res = await pool.query('SELECT id, username, credits FROM users');
+      return res.rows;
+    } catch (err) {
+      console.error('[db] PostgreSQL read error:', err);
+      return [];
+    }
+  }
+
+  try {
+    if (fs.existsSync(usersFilePath)) {
+      const data = fs.readFileSync(usersFilePath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('Failed to load users in socketHandler:', err);
+  }
+  return [];
+}
+
+async function saveUsers(usersData) {
+  if (pool) {
+    try {
+      for (const user of usersData) {
+        await pool.query(`
+          INSERT INTO users (id, username, credits)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (id) DO UPDATE
+          SET username = EXCLUDED.username, credits = EXCLUDED.credits
+        `, [user.id, user.username, user.credits]);
+      }
+    } catch (err) {
+      console.error('[db] PostgreSQL write error:', err);
+    }
+    return;
+  }
+
+  try {
+    const dir = path.dirname(usersFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(usersFilePath, JSON.stringify(usersData, null, 2));
+  } catch (err) {
+    console.error('Failed to save users in socketHandler:', err);
+  }
+}
 
 // ── state stores ─────────────────────────────────────────────────────────────
 
@@ -36,32 +109,6 @@ const taskQueue = [];
 // chunks that timed out with no idle node available — requeued for next idle
 // { taskId, chunkId }
 const requeuedChunks = [];
-
-// ── database helpers ─────────────────────────────────────────────────────────
-
-function loadUsers() {
-  try {
-    if (fs.existsSync(usersFilePath)) {
-      const data = fs.readFileSync(usersFilePath, 'utf8');
-      return JSON.parse(data);
-    }
-  } catch (err) {
-    console.error('Failed to load users in socketHandler:', err);
-  }
-  return [];
-}
-
-function saveUsers(usersData) {
-  try {
-    const dir = path.dirname(usersFilePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(usersFilePath, JSON.stringify(usersData, null, 2));
-  } catch (err) {
-    console.error('Failed to save users in socketHandler:', err);
-  }
-}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -460,7 +507,7 @@ function emitProgress(taskId, io) {
 
 // ── reassembly & credits ─────────────────────────────────────────────────────
 
-function tryReassemble(taskId, io) {
+async function tryReassemble(taskId, io) {
   const task = pendingTasks.get(taskId);
   if (!task) return;
 
@@ -483,7 +530,9 @@ function tryReassemble(taskId, io) {
   }
 
   // per-node contribution stats & credit awarding
-  const contributions = ordered.map(({ chunkId, socketId, userId, username, startRow, rowCount, result }) => {
+  const contributions = [];
+  for (const item of ordered) {
+    const { chunkId, socketId, userId, username, startRow, rowCount, result } = item;
     const credits = rowCount;
     const node = nodes.get(socketId);
     
@@ -494,14 +543,14 @@ function tryReassemble(taskId, io) {
       totalCredits = node.credits;
     }
 
-    // Persist to users.json if authenticated
+    // Persist to users table if authenticated
     if (userId) {
       try {
-        const usersList = loadUsers();
+        const usersList = await loadUsers();
         const dbUser = usersList.find(u => u.id === userId);
         if (dbUser) {
           dbUser.credits = (dbUser.credits || 0) + credits;
-          saveUsers(usersList);
+          await saveUsers(usersList);
           totalCredits = dbUser.credits;
           if (node) {
             node.credits = dbUser.credits; // keep in sync
@@ -513,7 +562,7 @@ function tryReassemble(taskId, io) {
       }
     }
 
-    return {
+    contributions.push({
       chunkId,
       socketId,
       userId,
@@ -523,8 +572,8 @@ function tryReassemble(taskId, io) {
       computeMs: result.computeMs,
       creditsAwarded: credits,
       totalCredits: totalCredits,
-    };
-  });
+    });
+  }
 
   const elapsed = Date.now() - task.dispatchedAt;
 
@@ -566,24 +615,59 @@ function tryReassemble(taskId, io) {
 // ── socket setup ─────────────────────────────────────────────────────────────
 
 function setupSocketHandler(io) {
-  io.on('connection', (socket) => {
+  io.on('connection', async (socket) => {
     // ── authenticate socket handshake ──
     let user = null;
-    if (socket.handshake.auth && socket.handshake.auth.token) {
-      try {
-        const decoded = jwt.verify(socket.handshake.auth.token, jwtSecretKey);
-        const usersList = loadUsers();
-        const dbUser = usersList.find(u => u.id === decoded.id);
-        if (dbUser) {
-          user = {
-            id: dbUser.id,
-            username: dbUser.username,
-            credits: dbUser.credits || 0
-          };
-          console.log(`[auth] User ${dbUser.username} connected on socket ${socket.id}`);
+    if (socket.handshake.auth && socket.handshake.auth.session) {
+      const session = socket.handshake.auth.session;
+      if (session && session.user) {
+        const userId = session.user.id;
+        const usersList = await loadUsers();
+        
+        // 1. Look up user by Google ID
+        let dbUser = usersList.find(u => u.id === userId);
+        
+        // 2. Resolve User ID Migration: If not found by Google ID, match by email/username prefix
+        if (!dbUser) {
+          const googleEmail = session.user.email;
+          const googleName = session.user.name;
+          
+          dbUser = usersList.find(u => {
+            if (!u.username) return false;
+            const uname = u.username.toLowerCase();
+            return (
+              (googleEmail && (uname === googleEmail.toLowerCase() || googleEmail.toLowerCase().startsWith(uname + '@'))) ||
+              (googleName && uname === googleName.toLowerCase())
+            );
+          });
+          
+          if (dbUser) {
+            console.log(`[migration] Linked existing account '${dbUser.username}' (credits: ${dbUser.credits}) to Google ID ${userId}`);
+            dbUser.id = userId; // Update ID to Google ID
+            // Sync username with Google profile
+            dbUser.username = googleName || googleEmail || dbUser.username;
+            await saveUsers(usersList);
+          }
         }
-      } catch (err) {
-        console.log(`[auth] Invalid token for socket ${socket.id}:`, err.message);
+
+        // 3. Fallback: Create new user if no match found
+        if (!dbUser) {
+          dbUser = {
+            id: userId,
+            username: session.user.name || session.user.email || 'Google User',
+            credits: 0
+          };
+          usersList.push(dbUser);
+          await saveUsers(usersList);
+          console.log(`[auth] Created new Google User ${dbUser.username} with ID ${userId}`);
+        }
+
+        user = {
+          id: dbUser.id,
+          username: dbUser.username,
+          credits: dbUser.credits || 0
+        };
+        console.log(`[auth] Google User ${dbUser.username} connected on socket ${socket.id}`);
       }
     }
 

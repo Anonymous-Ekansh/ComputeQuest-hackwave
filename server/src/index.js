@@ -5,7 +5,6 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-const authRoutes = require('./routes/auth');
 const setupSocketHandler = require('./socketHandler');
 
 const app = express();
@@ -23,9 +22,6 @@ const io = new Server(server, {
 // middleware
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json());
-
-// routes
-app.use('/api/auth', authRoutes);
 
 // health check
 app.get('/', (req, res) => {
