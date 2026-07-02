@@ -35,29 +35,7 @@ export default class WorkerManager {
     this._resultCallback = null;
 
     // ── create the persistent worker ──
-    this._worker = new Worker(
-      new URL('./workers/computeWorker.js', import.meta.url),
-      { type: 'module' },
-    );
-
-    // listen for results from the worker
-    this._worker.onmessage = (e) => {
-      this._state = 'idle';
-
-      // forward to registered callback
-      if (this._resultCallback) {
-        this._resultCallback(e.data);
-      }
-
-      // drain the queue
-      this._drainQueue();
-    };
-
-    this._worker.onerror = (err) => {
-      console.error('[WorkerManager] Worker error:', err);
-      this._state = 'idle';
-      this._drainQueue();
-    };
+    this._spawnWorker();
 
     // terminate only when the tab is being unloaded
     window.addEventListener('beforeunload', () => this.terminate());
@@ -107,6 +85,43 @@ export default class WorkerManager {
   }
 
   // ── internals ───────────────────────────────────────────────────────────
+
+  /** @private Create (or re-create) the worker and wire up handlers. */
+  _spawnWorker() {
+    this._worker = new Worker(
+      new URL('./workers/computeWorker.js', import.meta.url),
+      { type: 'module' },
+    );
+    this._worker.onmessage = this._onMessage.bind(this);
+    this._worker.onerror = this._onError.bind(this);
+  }
+
+  /** @private Handle a successful result from the worker. */
+  _onMessage(e) {
+    this._state = 'idle';
+
+    if (this._resultCallback) {
+      this._resultCallback(e.data);
+    }
+
+    this._drainQueue();
+  }
+
+  /** @private Handle a worker error — respawn so the session recovers. */
+  _onError(err) {
+    console.error('[WorkerManager] Worker crashed, respawning…', err);
+
+    // kill the dead worker
+    if (this._worker) {
+      this._worker.terminate();
+    }
+
+    // respawn a fresh one
+    this._spawnWorker();
+
+    this._state = 'idle';
+    this._drainQueue();
+  }
 
   /** @private Post a single payload to the worker. */
   _dispatch(payload) {
