@@ -584,7 +584,11 @@ function setupSocketHandler(io) {
     });
 
     socket.on('disconnect', () => {
-      // immediately reassign any in-flight chunks from this node
+      // remove from pool FIRST so it can't be picked as a reassignment target
+      nodes.delete(socket.id);
+      nodePerformance.delete(socket.id);
+
+      // reassign any in-flight chunks from this node
       for (const [taskId, task] of pendingTasks) {
         for (const [chunkId, meta] of task.chunks) {
           if (meta.socketId === socket.id && !task.results.has(chunkId)) {
@@ -605,8 +609,6 @@ function setupSocketHandler(io) {
         }
       }
 
-      nodes.delete(socket.id);
-      nodePerformance.delete(socket.id);
       console.log(`[node-] ${socket.id} disconnected (${nodes.size} total)`);
       io.emit('node_count', nodes.size);
     });
