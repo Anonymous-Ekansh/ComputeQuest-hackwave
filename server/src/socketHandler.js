@@ -1,24 +1,34 @@
 const { MATRIX_SIZE, TASK_TYPES } = require('../../shared/constants');
 
+// ── constants ────────────────────────────────────────────────────────────────
+
+const BASE_TIMEOUT_MS = 30_000;          // scaled by complexity + node speed
+const MAX_CHUNK_RETRIES = 3;             // per-chunk retry cap before task:failed
+const DEADLINE_SCAN_INTERVAL_MS = 2_000; // how often we scan for overdue chunks
+const SPOT_CHECK_COUNT = 2;              // random cells to verify after reassembly
+
 // ── state stores ─────────────────────────────────────────────────────────────
 
-// track all connected nodes: socketId -> { id, connectedAt, tasksCompleted, credits, status }
+// socketId -> { id, connectedAt, tasksCompleted, credits, status: 'idle'|'busy' }
 const nodes = new Map();
 
-// per-node historical compute speed (ms per row) — used for weighted chunk sizing
+// socketId -> { avgMsPerRow, samples }
 const nodePerformance = new Map();
 
-// in-flight tasks awaiting chunk results:
-//   taskId -> { matrixA, matrixB, totalRows, complexity,
-//               chunks: Map<chunkId, { socketId, startRow, rowCount, timeoutHandle }>,
-//               results: Map<chunkId, { rows, computeMs }>, dispatchedAt }
+// taskId -> { matrixA, matrixB, totalRows, complexity,
+//             chunks: Map<chunkId, ChunkMeta>, results: Map<chunkId, ChunkResult>,
+//             dispatchedAt }
+//
+// ChunkMeta  = { socketId, startRow, rowCount, deadline, retries }
+// ChunkResult = { rows, computeMs }
 const pendingTasks = new Map();
 
 // FIFO queue of pre-generated tasks waiting for idle nodes
 const taskQueue = [];
 
-// base timeout in ms — scaled by complexity and node speed
-const BASE_TIMEOUT_MS = 30_000;
+// chunks that timed out with no idle node available — requeued for next idle
+// { taskId, chunkId }
+const requeuedChunks = [];
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -33,6 +43,15 @@ function randomMatrix(size) {
     matrix.push(row);
   }
   return matrix;
+}
+
+/** Dot product of a row vector and a column extracted from a matrix */
+function dotRowCol(row, matrix, colIdx) {
+  let sum = 0;
+  for (let k = 0; k < row.length; k++) {
+    sum += row[k] * matrix[k][colIdx];
+  }
+  return sum;
 }
 
 /** Get all node IDs that are currently idle */
@@ -50,12 +69,19 @@ function markBusy(socketId) {
   if (node) node.status = 'busy';
 }
 
-/** Mark a node as idle and trigger the dispatch check */
+/** Mark a node as idle and trigger dispatch checks */
 function markIdle(socketId, io) {
   const node = nodes.get(socketId);
   if (node) node.status = 'idle';
-  // demand-driven: immediately check if there's work to hand out
+  // demand-driven: immediately try to hand out queued work
+  drainRequeued(io);
   tryDispatchNext(io);
+}
+
+/** Mark idle WITHOUT triggering dispatch (avoids recursion in timeout handler) */
+function markIdleSilent(socketId) {
+  const node = nodes.get(socketId);
+  if (node) node.status = 'idle';
 }
 
 /** Get the fastest idle node by avgMsPerRow (lowest = fastest) */
@@ -65,7 +91,6 @@ function getFastestIdleNode() {
 
   let best = idle[0];
   let bestSpeed = Infinity;
-
   for (const id of idle) {
     const perf = nodePerformance.get(id);
     const speed = perf ? perf.avgMsPerRow : Infinity;
@@ -78,38 +103,50 @@ function getFastestIdleNode() {
 }
 
 /**
- * Calculate the per-node timeout for a chunk, scaled by complexity and the
- * node's historical speed.
- *   timeout = BASE_TIMEOUT_MS * (complexity / 64) * max(avgMsPerRow, 1)
+ * Adaptive timeout for a chunk on a given node.
+ *   timeout = BASE_TIMEOUT_MS × (complexity / 64) × max(avgMsPerRow, 0.1)
  * Clamped to [5 000, 120 000] ms.
  */
-function chunkTimeout(socketId, complexity) {
+function adaptiveTimeout(socketId, complexity) {
   const perf = nodePerformance.get(socketId);
   const msPerRow = perf ? Math.max(perf.avgMsPerRow, 0.1) : 1;
   const scaled = BASE_TIMEOUT_MS * (complexity / 64) * msPerRow;
   return Math.max(5_000, Math.min(120_000, scaled));
 }
 
+// ── smart splitting ──────────────────────────────────────────────────────────
+
 /**
- * Split `totalRows` across `nodeIds` weighted by inverse of their average
- * ms-per-row.  Nodes with no history get the median weight so they aren't
- * starved.  Returns Map<socketId, { startRow, rowCount }>.
+ * Split `totalRows` across `nodeIds`, weighted by inverse of avgMsPerRow.
+ *
+ * Constraints enforced here:
+ *   • max chunks = min(nodeIds.length, totalRows)
+ *   • min chunk  = 1 row
+ *   • 1 node → no split overhead (whole matrix as one chunk)
+ *
+ * Returns Map<socketId, { startRow, rowCount }>.
  */
 function allocateRows(totalRows, nodeIds) {
-  // gather raw speeds (lower ms/row → faster → should get MORE rows)
-  const speeds = nodeIds.map((id) => {
+  // clamp: never more chunks than rows
+  const effectiveNodes = nodeIds.slice(0, Math.min(nodeIds.length, totalRows));
+
+  // single node → no split overhead
+  if (effectiveNodes.length === 1) {
+    return new Map([[effectiveNodes[0], { startRow: 0, rowCount: totalRows }]]);
+  }
+
+  // gather raw speeds
+  const speeds = effectiveNodes.map((id) => {
     const perf = nodePerformance.get(id);
     return perf ? perf.avgMsPerRow : null;
   });
 
-  // median of known speeds, or fallback 1
   const known = speeds.filter((s) => s !== null);
   const median =
     known.length > 0
       ? known.sort((a, b) => a - b)[Math.floor(known.length / 2)]
       : 1;
 
-  // weight = 1 / speed  (faster nodes get bigger weight)
   const weights = speeds.map((s) => 1 / (s ?? median));
   const totalWeight = weights.reduce((a, b) => a + b, 0);
 
@@ -117,18 +154,16 @@ function allocateRows(totalRows, nodeIds) {
   let cursor = 0;
   let remaining = totalRows;
 
-  for (let i = 0; i < nodeIds.length; i++) {
-    const isLast = i === nodeIds.length - 1;
-    // proportional share, at least 1 row, integer
+  for (let i = 0; i < effectiveNodes.length; i++) {
+    const isLast = i === effectiveNodes.length - 1;
     let rowCount = isLast
       ? remaining
       : Math.max(1, Math.round((weights[i] / totalWeight) * totalRows));
 
-    // clamp so we don't exceed remaining
     rowCount = Math.min(rowCount, remaining);
     if (rowCount <= 0) continue;
 
-    allocation.set(nodeIds[i], { startRow: cursor, rowCount });
+    allocation.set(effectiveNodes[i], { startRow: cursor, rowCount });
     cursor += rowCount;
     remaining -= rowCount;
   }
@@ -136,12 +171,9 @@ function allocateRows(totalRows, nodeIds) {
   return allocation;
 }
 
-// ── demand-driven dispatch ───────────────────────────────────────────────────
+// ── task queue / demand-driven dispatch ───────────────────────────────────────
 
-/**
- * Create a new task and push it onto the task queue.
- * Does NOT send it to nodes — that's tryDispatchNext()'s job.
- */
+/** Generate a fresh task and push it into the queue */
 function enqueueTask() {
   const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const matrixA = randomMatrix(MATRIX_SIZE);
@@ -153,58 +185,38 @@ function enqueueTask() {
 }
 
 /**
- * Core scheduling loop — called after every state change (node idle, node
- * connect, chunk result, timeout reassignment).
- *
- * Rules:
- *   1. There must be idle nodes.
- *   2. There must be no in-flight task (previous must be complete or timed out)
- *      OR there's a queued task ready to go.
- *   3. If the queue is empty, generate a fresh task automatically.
+ * Core scheduling loop — triggered after every state change.
+ * Dispatches the next queued task only when:
+ *   1. At least one node is idle, AND
+ *   2. No task is currently in-flight
  */
 function tryDispatchNext(io) {
   const idle = getIdleNodeIds();
   if (idle.length === 0) return;
-
-  // don't stack tasks — wait until the current one finishes or times out
   if (pendingTasks.size > 0) return;
 
-  // grab or create a task
-  if (taskQueue.length === 0) {
-    enqueueTask();
-  }
+  if (taskQueue.length === 0) enqueueTask();
+
   const task = taskQueue.shift();
   dispatchTask(io, task, idle);
 }
 
-/**
- * Dispatch a prepared task to the given idle node IDs.
- */
+/** Dispatch a prepared task to idle nodes */
 function dispatchTask(io, task, idleNodeIds) {
   const { taskId, matrixA, matrixB, complexity } = task;
   const totalRows = MATRIX_SIZE;
 
   const allocation = allocateRows(totalRows, idleNodeIds);
-
-  // build pending-task record
   const chunks = new Map();
   let chunkIdx = 0;
 
   for (const [socketId, { startRow, rowCount }] of allocation) {
     const chunkId = `${taskId}_chunk_${chunkIdx}`;
+    const deadline = Date.now() + adaptiveTimeout(socketId, complexity);
 
-    // per-chunk timeout — complexity-aware
-    const timeout = chunkTimeout(socketId, complexity);
-    const timeoutHandle = setTimeout(
-      () => handleChunkTimeout(taskId, chunkId, io),
-      timeout,
-    );
+    chunks.set(chunkId, { socketId, startRow, rowCount, deadline, retries: 0 });
 
-    chunks.set(chunkId, { socketId, startRow, rowCount, timeoutHandle });
-
-    // slice rows for this node
     const rowsA = matrixA.slice(startRow, startRow + rowCount);
-
     const payload = {
       taskId,
       chunkId,
@@ -236,75 +248,169 @@ function dispatchTask(io, task, idleNodeIds) {
   );
 }
 
-// ── timeout & reassignment ───────────────────────────────────────────────────
+// ── deadline scanner (replaces per-chunk setTimeout) ─────────────────────────
 
 /**
- * Called when a chunk's per-node timeout fires.
- * Reassign the timed-out chunk to the fastest idle node, or mark the task
- * failed if no one is available.
+ * Runs every DEADLINE_SCAN_INTERVAL_MS.
+ * Scans all pendingTasks for overdue chunks and handles them.
  */
-function handleChunkTimeout(taskId, chunkId, io) {
+function scanDeadlines(io) {
+  const now = Date.now();
+
+  for (const [taskId, task] of pendingTasks) {
+    for (const [chunkId, meta] of task.chunks) {
+      // already have a result for this chunk
+      if (task.results.has(chunkId)) continue;
+
+      if (now < meta.deadline) continue;
+
+      // ── overdue ──
+      meta.retries++;
+      console.log(
+        `[timeout] Chunk ${chunkId} on ${meta.socketId} overdue ` +
+          `(retry ${meta.retries}/${MAX_CHUNK_RETRIES})`,
+      );
+
+      // exceeded retry limit → fail the whole task
+      if (meta.retries > MAX_CHUNK_RETRIES) {
+        failTask(taskId, `Chunk ${chunkId} exceeded ${MAX_CHUNK_RETRIES} retries`, io);
+        break; // task is gone, stop iterating its chunks
+      }
+
+      // mark the old node idle (it's apparently stuck)
+      markIdleSilent(meta.socketId);
+
+      // try to reassign
+      const replacement = getFastestIdleNode();
+      if (replacement) {
+        reassignChunk(taskId, chunkId, replacement, io);
+      } else {
+        // no idle node → requeue for the next available one
+        meta.deadline = Infinity; // stop re-triggering until reassigned
+        requeuedChunks.push({ taskId, chunkId });
+        console.log(`[requeue] Chunk ${chunkId} queued for next idle node`);
+      }
+    }
+  }
+}
+
+/** Reassign a single chunk to a new node */
+function reassignChunk(taskId, chunkId, socketId, io) {
   const task = pendingTasks.get(taskId);
   if (!task) return;
 
-  // already received?
-  if (task.results.has(chunkId)) return;
+  const meta = task.chunks.get(chunkId);
+  if (!meta) return;
 
-  const chunkMeta = task.chunks.get(chunkId);
-  if (!chunkMeta) return;
+  meta.socketId = socketId;
+  meta.deadline = Date.now() + adaptiveTimeout(socketId, task.complexity);
 
-  const oldSocket = chunkMeta.socketId;
-  console.log(
-    `[timeout] Chunk ${chunkId} on ${oldSocket} timed out — attempting reassignment`,
-  );
-
-  // mark the old node idle (it's apparently stuck; the result will be ignored
-  // if it arrives late)
-  markIdleSilent(oldSocket);
-
-  // find the fastest idle node
-  const replacement = getFastestIdleNode();
-  if (!replacement) {
-    console.log(`[timeout] No idle node available to reassign ${chunkId}`);
-    return;
-  }
-
-  // update chunk metadata to point to the new node
-  const newTimeout = chunkTimeout(replacement, task.complexity);
-  chunkMeta.socketId = replacement;
-  chunkMeta.timeoutHandle = setTimeout(
-    () => handleChunkTimeout(taskId, chunkId, io),
-    newTimeout,
-  );
-
-  // send the chunk to the replacement
-  const rowsA = task.matrixA.slice(
-    chunkMeta.startRow,
-    chunkMeta.startRow + chunkMeta.rowCount,
-  );
-
+  const rowsA = task.matrixA.slice(meta.startRow, meta.startRow + meta.rowCount);
   const payload = {
     taskId,
     chunkId,
     type: TASK_TYPES.MATRIX_MULTIPLY,
     chunkData: { rowsA, matrixB: task.matrixB },
-    startRow: chunkMeta.startRow,
-    rowCount: chunkMeta.rowCount,
+    startRow: meta.startRow,
+    rowCount: meta.rowCount,
     totalRows: task.totalRows,
   };
 
-  markBusy(replacement);
-  io.to(replacement).emit('task_chunk', payload);
+  markBusy(socketId);
+  io.to(socketId).emit('task_chunk', payload);
 
   console.log(
-    `[reassign] Chunk ${chunkId} reassigned to ${replacement} (timeout ${newTimeout}ms)`,
+    `[reassign] Chunk ${chunkId} → ${socketId} ` +
+      `(deadline +${adaptiveTimeout(socketId, task.complexity)}ms)`,
   );
 }
 
-/** Mark idle without triggering dispatch (used inside timeout handler) */
-function markIdleSilent(socketId) {
-  const node = nodes.get(socketId);
-  if (node) node.status = 'idle';
+/** Drain requeued chunks whenever an idle node becomes available */
+function drainRequeued(io) {
+  while (requeuedChunks.length > 0) {
+    const replacement = getFastestIdleNode();
+    if (!replacement) break;
+
+    const { taskId, chunkId } = requeuedChunks.shift();
+
+    // task may have been failed/removed in the meantime
+    const task = pendingTasks.get(taskId);
+    if (!task || task.results.has(chunkId)) continue;
+
+    reassignChunk(taskId, chunkId, replacement, io);
+  }
+}
+
+// ── task failure ─────────────────────────────────────────────────────────────
+
+function failTask(taskId, reason, io) {
+  const task = pendingTasks.get(taskId);
+  if (!task) return;
+
+  console.error(`[FAILED] Task ${taskId}: ${reason}`);
+
+  // mark all assigned nodes idle
+  for (const [, meta] of task.chunks) {
+    markIdleSilent(meta.socketId);
+  }
+
+  // remove any requeued entries for this task
+  for (let i = requeuedChunks.length - 1; i >= 0; i--) {
+    if (requeuedChunks[i].taskId === taskId) requeuedChunks.splice(i, 1);
+  }
+
+  io.emit('task:failed', { taskId, reason });
+
+  pendingTasks.delete(taskId);
+
+  // try to move on to the next task
+  tryDispatchNext(io);
+}
+
+// ── result verification ──────────────────────────────────────────────────────
+
+/**
+ * Spot-check `SPOT_CHECK_COUNT` random cells of a chunk result against a
+ * server-side dot-product computation.
+ *
+ * @returns {{ ok: boolean, failures: Array<{ i, j, expected, got }> }}
+ */
+function verifyChunkResult(task, chunkMeta, resultRows) {
+  const { matrixA, matrixB } = task;
+  const { startRow, rowCount } = chunkMeta;
+  const cols = matrixB[0].length;
+  const failures = [];
+
+  const checks = Math.min(SPOT_CHECK_COUNT, rowCount * cols);
+
+  for (let c = 0; c < checks; c++) {
+    // pick a random cell inside this chunk
+    const localRow = Math.floor(Math.random() * rowCount);
+    const col = Math.floor(Math.random() * cols);
+    const globalRow = startRow + localRow;
+
+    const expected = dotRowCol(matrixA[globalRow], matrixB, col);
+    const got = resultRows[localRow][col];
+
+    if (got !== expected) {
+      failures.push({ i: globalRow, j: col, expected, got });
+    }
+  }
+
+  return { ok: failures.length === 0, failures };
+}
+
+// ── progress events ──────────────────────────────────────────────────────────
+
+function emitProgress(taskId, io) {
+  const task = pendingTasks.get(taskId);
+  if (!task) return;
+
+  const chunksTotal = task.chunks.size;
+  const chunksComplete = task.results.size;
+  const percentComplete = Math.round((chunksComplete / chunksTotal) * 100);
+
+  io.emit('task:progress', { taskId, chunksComplete, chunksTotal, percentComplete });
 }
 
 // ── reassembly & credits ─────────────────────────────────────────────────────
@@ -315,11 +421,6 @@ function tryReassemble(taskId, io) {
 
   // have all chunks reported back?
   if (task.results.size < task.chunks.size) return;
-
-  // clear any remaining timeout handles
-  for (const [, meta] of task.chunks) {
-    if (meta.timeoutHandle) clearTimeout(meta.timeoutHandle);
-  }
 
   // sort chunks by startRow so we can concatenate in order
   const ordered = [...task.chunks.entries()]
@@ -338,7 +439,6 @@ function tryReassemble(taskId, io) {
 
   // per-node contribution stats & credit awarding
   const contributions = ordered.map(({ chunkId, socketId, startRow, rowCount, result }) => {
-    // credits proportional to rows computed
     const credits = rowCount;
     const node = nodes.get(socketId);
     if (node) {
@@ -401,50 +501,81 @@ function setupSocketHandler(io) {
     io.emit('node_count', nodes.size);
 
     // a new idle node just appeared — maybe we can dispatch work now
+    drainRequeued(io);
     tryDispatchNext(io);
 
     // handle compute results coming back from a browser
     socket.on('chunk_result', (data) => {
       const { taskId, chunkId, resultRows, computeMs } = data;
 
-      // ── update performance map ──
       const task = pendingTasks.get(taskId);
-      if (task) {
-        const chunkMeta = task.chunks.get(chunkId);
-        if (chunkMeta) {
-          // ignore results from a node that was already reassigned away
-          if (chunkMeta.socketId !== socket.id) {
-            console.log(
-              `[result] Ignoring late result from ${socket.id} for ${chunkId} (reassigned to ${chunkMeta.socketId})`,
-            );
-            markIdle(socket.id, io);
-            return;
-          }
-
-          // clear the timeout for this chunk
-          if (chunkMeta.timeoutHandle) {
-            clearTimeout(chunkMeta.timeoutHandle);
-            chunkMeta.timeoutHandle = null;
-          }
-
-          const msPerRow = computeMs / chunkMeta.rowCount;
-          const prev = nodePerformance.get(socket.id);
-          if (prev) {
-            // exponential moving average (α = 0.3)
-            prev.avgMsPerRow = prev.avgMsPerRow * 0.7 + msPerRow * 0.3;
-            prev.samples++;
-          } else {
-            nodePerformance.set(socket.id, { avgMsPerRow: msPerRow, samples: 1 });
-          }
-
-          // store result rows for reassembly
-          task.results.set(chunkId, { rows: resultRows, computeMs });
-        }
+      if (!task) {
+        markIdle(socket.id, io);
+        return;
       }
 
+      const chunkMeta = task.chunks.get(chunkId);
+      if (!chunkMeta) {
+        markIdle(socket.id, io);
+        return;
+      }
+
+      // ignore results from a node that was already reassigned away
+      if (chunkMeta.socketId !== socket.id) {
+        console.log(
+          `[result] Ignoring late result from ${socket.id} for ${chunkId} (reassigned to ${chunkMeta.socketId})`,
+        );
+        markIdle(socket.id, io);
+        return;
+      }
+
+      // ── spot-check verification ──
+      const verification = verifyChunkResult(task, chunkMeta, resultRows);
+      if (!verification.ok) {
+        console.warn(
+          `[verify] Chunk ${chunkId} FAILED spot-check:`,
+          verification.failures,
+        );
+
+        chunkMeta.retries++;
+
+        if (chunkMeta.retries > MAX_CHUNK_RETRIES) {
+          failTask(taskId, `Chunk ${chunkId} failed verification ${MAX_CHUNK_RETRIES} times`, io);
+          markIdle(socket.id, io);
+          return;
+        }
+
+        // re-dispatch only this chunk to the same or a different node
+        console.log(
+          `[verify] Re-dispatching chunk ${chunkId} (retry ${chunkMeta.retries}/${MAX_CHUNK_RETRIES})`,
+        );
+        markIdleSilent(socket.id);
+        const target = getFastestIdleNode() || socket.id;
+        reassignChunk(taskId, chunkId, target, io);
+        return;
+      }
+
+      // ── verification passed — accept result ──
+
+      // update performance map
+      const msPerRow = computeMs / chunkMeta.rowCount;
+      const prev = nodePerformance.get(socket.id);
+      if (prev) {
+        prev.avgMsPerRow = prev.avgMsPerRow * 0.7 + msPerRow * 0.3;
+        prev.samples++;
+      } else {
+        nodePerformance.set(socket.id, { avgMsPerRow: msPerRow, samples: 1 });
+      }
+
+      // store result rows for reassembly
+      task.results.set(chunkId, { rows: resultRows, computeMs });
+
       console.log(
-        `[result] ${socket.id} finished chunk ${chunkId} of ${taskId} in ${computeMs}ms`,
+        `[result] ${socket.id} finished chunk ${chunkId} of ${taskId} in ${computeMs}ms ✓`,
       );
+
+      // emit granular progress
+      emitProgress(taskId, io);
 
       // node is now idle — this also triggers tryDispatchNext via markIdle
       markIdle(socket.id, io);
@@ -453,13 +584,23 @@ function setupSocketHandler(io) {
     });
 
     socket.on('disconnect', () => {
-      // clean up any in-flight chunk timeouts assigned to this node
+      // immediately reassign any in-flight chunks from this node
       for (const [taskId, task] of pendingTasks) {
         for (const [chunkId, meta] of task.chunks) {
           if (meta.socketId === socket.id && !task.results.has(chunkId)) {
-            // the node left before finishing — trigger timeout immediately
-            if (meta.timeoutHandle) clearTimeout(meta.timeoutHandle);
-            handleChunkTimeout(taskId, chunkId, io);
+            meta.retries++;
+            if (meta.retries > MAX_CHUNK_RETRIES) {
+              failTask(taskId, `Node ${socket.id} disconnected, chunk ${chunkId} exceeded retries`, io);
+              break;
+            }
+            const replacement = getFastestIdleNode();
+            if (replacement) {
+              reassignChunk(taskId, chunkId, replacement, io);
+            } else {
+              meta.deadline = Infinity;
+              requeuedChunks.push({ taskId, chunkId });
+              console.log(`[requeue] Chunk ${chunkId} queued (node ${socket.id} disconnected)`);
+            }
           }
         }
       }
@@ -471,8 +612,10 @@ function setupSocketHandler(io) {
     });
   });
 
-  // No setInterval — dispatch is entirely demand-driven.
-  // Seed the first task so work begins as soon as a node connects.
+  // deadline scanner — every 2 s, check for overdue chunks
+  setInterval(() => scanDeadlines(io), DEADLINE_SCAN_INTERVAL_MS);
+
+  // seed the first task so work begins as soon as a node connects
   enqueueTask();
 }
 
