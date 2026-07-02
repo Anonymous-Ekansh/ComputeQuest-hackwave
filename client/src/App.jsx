@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import WorkerManager from './WorkerManager';
+import Leaderboard from './Leaderboard';
 import './App.css';
 
 const SERVER_URL = 'http://localhost:3001'; // Fallback for local, we will use the actual domain if deployed, or keep dynamic if we want
@@ -217,6 +218,8 @@ function App() {
           </div>
         )}
       </div>
+
+      <Leaderboard />
 
       {lastResult && (
         <div className="visualizer-container">

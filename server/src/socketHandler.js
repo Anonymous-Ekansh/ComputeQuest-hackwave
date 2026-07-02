@@ -28,10 +28,14 @@ if (dbUrl) {
     CREATE TABLE IF NOT EXISTS users (
       id VARCHAR(255) PRIMARY KEY,
       username VARCHAR(255) NOT NULL,
-      credits INTEGER DEFAULT 0 NOT NULL
+      credits INTEGER DEFAULT 0 NOT NULL,
+      total_contributed INTEGER DEFAULT 0 NOT NULL
     );
   `).then(() => {
     console.log('[db] PostgreSQL/Supabase table ready');
+    // Auto-migrate to add total_contributed if table already existed
+    pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS total_contributed INTEGER DEFAULT 0 NOT NULL;`)
+      .catch(err => { /* might fail if already exists on older pg versions, safe to ignore */ });
   }).catch(err => {
     console.error('[db] Error initializing table:', err);
   });
@@ -40,7 +44,7 @@ if (dbUrl) {
 async function loadUsers() {
   if (pool) {
     try {
-      const res = await pool.query('SELECT id, username, credits FROM users');
+      const res = await pool.query('SELECT id, username, credits, total_contributed FROM users');
       return res.rows;
     } catch (err) {
       console.error('[db] PostgreSQL read error:', err);
@@ -64,11 +68,11 @@ async function saveUsers(usersData) {
     try {
       for (const user of usersData) {
         await pool.query(`
-          INSERT INTO users (id, username, credits)
-          VALUES ($1, $2, $3)
+          INSERT INTO users (id, username, credits, total_contributed)
+          VALUES ($1, $2, $3, $4)
           ON CONFLICT (id) DO UPDATE
-          SET username = EXCLUDED.username, credits = EXCLUDED.credits
-        `, [user.id, user.username, user.credits]);
+          SET username = EXCLUDED.username, credits = EXCLUDED.credits, total_contributed = EXCLUDED.total_contributed
+        `, [user.id, user.username, user.credits, user.total_contributed || 0]);
       }
     } catch (err) {
       console.error('[db] PostgreSQL write error:', err);
@@ -550,12 +554,13 @@ async function tryReassemble(taskId, io) {
         const dbUser = usersList.find(u => u.id === userId);
         if (dbUser) {
           dbUser.credits = (dbUser.credits || 0) + credits;
+          dbUser.total_contributed = (dbUser.total_contributed || 0) + credits;
           await saveUsers(usersList);
           totalCredits = dbUser.credits;
           if (node) {
             node.credits = dbUser.credits; // keep in sync
           }
-          console.log(`[credits] Persisted ${credits} credits to user ${username}. Total: ${dbUser.credits}`);
+          console.log(`[credits] Persisted ${credits} credits to user ${username}. Total: ${dbUser.credits}, Lifetime: ${dbUser.total_contributed}`);
         }
       } catch (err) {
         console.error(`[credits] Failed to persist credits for user ${userId}:`, err);
@@ -829,4 +834,21 @@ function setupSocketHandler(io) {
   enqueueTask();
 }
 
-module.exports = setupSocketHandler;
+// ── leaderboard logic ────────────────────────────────────────────────────────
+async function getLeaderboard() {
+  const usersList = await loadUsers();
+  // Filter out users with 0 total_contributed to keep leaderboard clean
+  const activeUsers = usersList.filter(u => (u.total_contributed || 0) > 0);
+  
+  // Sort descending by total_contributed
+  activeUsers.sort((a, b) => (b.total_contributed || 0) - (a.total_contributed || 0));
+  
+  // Return top 10
+  return activeUsers.slice(0, 10).map((u, index) => ({
+    rank: index + 1,
+    username: u.username,
+    total_contributed: u.total_contributed || 0,
+  }));
+}
+
+module.exports = { setupSocketHandler, getLeaderboard };

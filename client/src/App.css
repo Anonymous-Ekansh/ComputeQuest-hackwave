@@ -324,3 +324,91 @@ h1 {
 }
 
 
+
+/* Leaderboard */
+.leaderboard-container {
+  margin-bottom: 24px;
+}
+
+.leaderboard-container h3 {
+  font-size: 0.85rem;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.leaderboard-list {
+  background: #0d0d14;
+  border: 1px solid #1a1a25;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.leaderboard-loading, .leaderboard-empty {
+  padding: 24px;
+  text-align: center;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.leaderboard-table th {
+  text-align: left;
+  padding: 12px 16px;
+  color: #8b8ba0;
+  border-bottom: 1px solid #1a1a25;
+  font-weight: normal;
+}
+
+.leaderboard-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #1a1a25;
+}
+
+.leaderboard-table tr:last-child td {
+  border-bottom: none;
+}
+
+.leaderboard-table tr:hover {
+  background: #151520;
+}
+
+.leaderboard-table .rank-cell {
+  width: 50px;
+  color: #555;
+}
+
+.leaderboard-table .name-cell {
+  color: #e0e0e0;
+}
+
+.leaderboard-table .score-cell {
+  text-align: right;
+  color: #34d399;
+  font-family: monospace;
+}
+
+.top-1 .rank-cell, .top-2 .rank-cell, .top-3 .rank-cell {
+  font-size: 1.1rem;
+}
+
+.top-1 .name-cell {
+  color: #fbbf24;
+  font-weight: bold;
+}
+
+.top-2 .name-cell {
+  color: #94a3b8;
+  font-weight: bold;
+}
+
+.top-3 .name-cell {
+  color: #b45309;
+  font-weight: bold;
+}

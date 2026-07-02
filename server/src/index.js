@@ -5,7 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-const setupSocketHandler = require('./socketHandler');
+
 
 const app = express();
 const server = http.createServer(app);
@@ -29,7 +29,18 @@ app.get('/', (req, res) => {
 });
 
 // set up websocket handling
+const { setupSocketHandler, getLeaderboard } = require('./socketHandler');
 setupSocketHandler(io);
+
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    const leaderboard = await getLeaderboard();
+    res.json(leaderboard);
+  } catch (err) {
+    console.error('Leaderboard fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch leaderboard' });
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
