@@ -1,4 +1,7 @@
 const { MATRIX_SIZE, TASK_TYPES } = require('../../shared/constants');
+const jwt = require('jsonwebtoken');
+const fs = require('fs');
+const path = require('path');
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -7,9 +10,13 @@ const MAX_CHUNK_RETRIES = 3;             // per-chunk retry cap before task:fail
 const DEADLINE_SCAN_INTERVAL_MS = 2_000; // how often we scan for overdue chunks
 const SPOT_CHECK_COUNT = 2;              // random cells to verify after reassembly
 
+const JWT_SECRET = process.env.JWT_SECRET;
+const jwtSecretKey = JWT_SECRET || 'computequest-dev-secret-change-me';
+const usersFilePath = path.join(__dirname, '..', 'data', 'users.json');
+
 // ── state stores ─────────────────────────────────────────────────────────────
 
-// socketId -> { id, connectedAt, tasksCompleted, credits, status: 'idle'|'busy' }
+// socketId -> { id, userId, username, connectedAt, tasksCompleted, credits, status: 'idle'|'busy' }
 const nodes = new Map();
 
 // socketId -> { avgMsPerRow, samples }
@@ -19,7 +26,7 @@ const nodePerformance = new Map();
 //             chunks: Map<chunkId, ChunkMeta>, results: Map<chunkId, ChunkResult>,
 //             dispatchedAt }
 //
-// ChunkMeta  = { socketId, startRow, rowCount, deadline, retries }
+// ChunkMeta  = { socketId, userId, username, startRow, rowCount, deadline, retries }
 // ChunkResult = { rows, computeMs }
 const pendingTasks = new Map();
 
@@ -29,6 +36,32 @@ const taskQueue = [];
 // chunks that timed out with no idle node available — requeued for next idle
 // { taskId, chunkId }
 const requeuedChunks = [];
+
+// ── database helpers ─────────────────────────────────────────────────────────
+
+function loadUsers() {
+  try {
+    if (fs.existsSync(usersFilePath)) {
+      const data = fs.readFileSync(usersFilePath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('Failed to load users in socketHandler:', err);
+  }
+  return [];
+}
+
+function saveUsers(usersData) {
+  try {
+    const dir = path.dirname(usersFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(usersFilePath, JSON.stringify(usersData, null, 2));
+  } catch (err) {
+    console.error('Failed to save users in socketHandler:', err);
+  }
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -213,8 +246,17 @@ function dispatchTask(io, task, idleNodeIds) {
   for (const [socketId, { startRow, rowCount }] of allocation) {
     const chunkId = `${taskId}_chunk_${chunkIdx}`;
     const deadline = Date.now() + adaptiveTimeout(socketId, complexity);
+    const node = nodes.get(socketId);
 
-    chunks.set(chunkId, { socketId, startRow, rowCount, deadline, retries: 0 });
+    chunks.set(chunkId, {
+      socketId,
+      userId: node ? node.userId : null,
+      username: node ? node.username : 'Anonymous Node',
+      startRow,
+      rowCount,
+      deadline,
+      retries: 0
+    });
 
     const rowsA = matrixA.slice(startRow, startRow + rowCount);
     const payload = {
@@ -302,7 +344,10 @@ function reassignChunk(taskId, chunkId, socketId, io) {
   const meta = task.chunks.get(chunkId);
   if (!meta) return;
 
+  const replacementNode = nodes.get(socketId);
   meta.socketId = socketId;
+  meta.userId = replacementNode ? replacementNode.userId : null;
+  meta.username = replacementNode ? replacementNode.username : 'Anonymous Node';
   meta.deadline = Date.now() + adaptiveTimeout(socketId, task.complexity);
 
   const rowsA = task.matrixA.slice(meta.startRow, meta.startRow + meta.rowCount);
@@ -438,22 +483,46 @@ function tryReassemble(taskId, io) {
   }
 
   // per-node contribution stats & credit awarding
-  const contributions = ordered.map(({ chunkId, socketId, startRow, rowCount, result }) => {
+  const contributions = ordered.map(({ chunkId, socketId, userId, username, startRow, rowCount, result }) => {
     const credits = rowCount;
     const node = nodes.get(socketId);
+    
+    let totalCredits = credits;
     if (node) {
       node.credits = (node.credits || 0) + credits;
       node.tasksCompleted++;
+      totalCredits = node.credits;
+    }
+
+    // Persist to users.json if authenticated
+    if (userId) {
+      try {
+        const usersList = loadUsers();
+        const dbUser = usersList.find(u => u.id === userId);
+        if (dbUser) {
+          dbUser.credits = (dbUser.credits || 0) + credits;
+          saveUsers(usersList);
+          totalCredits = dbUser.credits;
+          if (node) {
+            node.credits = dbUser.credits; // keep in sync
+          }
+          console.log(`[credits] Persisted ${credits} credits to user ${username}. Total: ${dbUser.credits}`);
+        }
+      } catch (err) {
+        console.error(`[credits] Failed to persist credits for user ${userId}:`, err);
+      }
     }
 
     return {
       chunkId,
       socketId,
+      userId,
+      username,
       startRow,
       rowCount,
       computeMs: result.computeMs,
       creditsAwarded: credits,
-      totalCredits: node ? node.credits : 0,
+      totalCredits: totalCredits,
     };
   });
 
@@ -476,6 +545,18 @@ function tryReassemble(taskId, io) {
     contributions,
   });
 
+  // Emit updated user info/credits to authenticated nodes
+  for (const { socketId } of contributions) {
+    const activeNode = nodes.get(socketId);
+    if (activeNode) {
+      io.to(socketId).emit('user_info', {
+        username: activeNode.username,
+        credits: activeNode.credits,
+        isAuthenticated: !!activeNode.userId,
+      });
+    }
+  }
+
   pendingTasks.delete(taskId);
 
   // task done → check if we should immediately dispatch the next one
@@ -486,19 +567,48 @@ function tryReassemble(taskId, io) {
 
 function setupSocketHandler(io) {
   io.on('connection', (socket) => {
+    // ── authenticate socket handshake ──
+    let user = null;
+    if (socket.handshake.auth && socket.handshake.auth.token) {
+      try {
+        const decoded = jwt.verify(socket.handshake.auth.token, jwtSecretKey);
+        const usersList = loadUsers();
+        const dbUser = usersList.find(u => u.id === decoded.id);
+        if (dbUser) {
+          user = {
+            id: dbUser.id,
+            username: dbUser.username,
+            credits: dbUser.credits || 0
+          };
+          console.log(`[auth] User ${dbUser.username} connected on socket ${socket.id}`);
+        }
+      } catch (err) {
+        console.log(`[auth] Invalid token for socket ${socket.id}:`, err.message);
+      }
+    }
+
     // register this node as idle
     nodes.set(socket.id, {
       id: socket.id,
+      userId: user ? user.id : null,
+      username: user ? user.username : 'Anonymous Node',
       connectedAt: new Date(),
       tasksCompleted: 0,
-      credits: 0,
+      credits: user ? user.credits : 0,
       status: 'idle',
     });
 
-    console.log(`[node+] ${socket.id} connected (${nodes.size} total)`);
+    console.log(`[node+] ${socket.id} (${user ? user.username : 'anonymous'}) connected (${nodes.size} total)`);
 
     // tell everyone the updated count
     io.emit('node_count', nodes.size);
+
+    // Send user info back to connection
+    socket.emit('user_info', {
+      username: user ? user.username : 'Anonymous Node',
+      credits: user ? user.credits : 0,
+      isAuthenticated: !!user,
+    });
 
     // a new idle node just appeared — maybe we can dispatch work now
     drainRequeued(io);
@@ -588,7 +698,7 @@ function setupSocketHandler(io) {
       nodes.delete(socket.id);
       nodePerformance.delete(socket.id);
 
-      // reassign any in-flight chunks from this node
+      // immediately reassign any in-flight chunks from this node
       for (const [taskId, task] of pendingTasks) {
         for (const [chunkId, meta] of task.chunks) {
           if (meta.socketId === socket.id && !task.results.has(chunkId)) {
