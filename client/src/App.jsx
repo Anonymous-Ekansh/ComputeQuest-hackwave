@@ -14,12 +14,16 @@ function App() {
   const [lastResult, setLastResult] = useState(null);
   const [log, setLog] = useState([]);
 
-  // Auth states
   const [userInfo, setUserInfo] = useState({
     username: 'Anonymous Node',
     credits: 0,
     isAuthenticated: false,
   });
+  const userInfoRef = useRef(userInfo);
+  
+  useEffect(() => {
+    userInfoRef.current = userInfo;
+  }, [userInfo]);
   
   const [authToken, setAuthToken] = useState(localStorage.getItem('cq_auth_token') || null);
 
@@ -105,6 +109,10 @@ function App() {
 
       // when server sends a chunk, queue it through the WorkerManager
       socket.on('task_chunk', (chunk) => {
+        if (!userInfoRef.current.isAuthenticated) {
+          console.warn('[client] Dropping chunk: unauthenticated');
+          return;
+        }
         addLog(`Received chunk ${chunk.chunkId} — rows ${chunk.startRow}–${chunk.startRow + chunk.rowCount - 1} of ${chunk.totalRows}`);
         workerManager.sendChunk(chunk);
       });
@@ -190,96 +198,105 @@ function App() {
         <span>{nodeCount} node{nodeCount !== 1 ? 's' : ''} online</span>
       </div>
 
-      {/* Task Progress Bar */}
-      {taskProgress && (
-        <div className="progress-container">
-          <div className="progress-header">
-            <span>Processing Task: {taskProgress.taskId.slice(-10)}</span>
-            <span>{taskProgress.percentComplete}% ({taskProgress.chunksComplete}/{taskProgress.chunksTotal} chunks)</span>
-          </div>
-          <div className="progress-track">
-            <div
-              className="progress-fill"
-              style={{ width: `${taskProgress.percentComplete}%` }}
-            />
-          </div>
+      {!userInfo.isAuthenticated ? (
+        <div className="unauthenticated-message" style={{ textAlign: 'center', margin: '40px 0', padding: '30px', backgroundColor: '#1e293b', borderRadius: '12px' }}>
+          <h2>Sign in with Google to start contributing compute!</h2>
+          <p style={{ color: '#94a3b8', marginTop: '10px' }}>Your browser is connected to the network, but will not receive or process compute chunks until you authenticate.</p>
         </div>
-      )}
+      ) : (
+        <>
+          {/* Task Progress Bar */}
+          {taskProgress && (
+            <div className="progress-container">
+              <div className="progress-header">
+                <span>Processing Task: {taskProgress.taskId.slice(-10)}</span>
+                <span>{taskProgress.percentComplete}% ({taskProgress.chunksComplete}/{taskProgress.chunksTotal} chunks)</span>
+              </div>
+              <div className="progress-track">
+                <div
+                  className="progress-fill"
+                  style={{ width: `${taskProgress.percentComplete}%` }}
+                />
+              </div>
+            </div>
+          )}
 
-      <div className="stats">
-        <div className="stat-card">
-          <div className="stat-value">{tasksCompleted}</div>
-          <div className="stat-label">Tasks Completed</div>
-        </div>
-        {lastResult && (
-          <div className="stat-card">
-            <div className="stat-value">{lastResult.computeTimeMs}ms</div>
-            <div className="stat-label">Last Compute Time</div>
+          <div className="stats">
+            <div className="stat-card">
+              <div className="stat-value">{tasksCompleted}</div>
+              <div className="stat-label">Tasks Completed</div>
+            </div>
+            {lastResult && (
+              <div className="stat-card">
+                <div className="stat-value">{lastResult.computeTimeMs}ms</div>
+                <div className="stat-label">Last Compute Time</div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+
+          {lastResult && (
+            <div className="visualizer-container">
+              <h3>Live Matrix Compute Visualizer</h3>
+              <div className="matrices-wrapper">
+                <div className="matrix-box">
+                  <span className="matrix-name">A</span>
+                  <div className="matrix-grid">
+                    {lastResult.matrixA.map((row, r) => (
+                      <div key={r} className="matrix-row">
+                        {row.map((val, c) => (
+                          <span key={c} className="matrix-cell">{val}</span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="matrix-op">×</div>
+
+                <div className="matrix-box">
+                  <span className="matrix-name">B</span>
+                  <div className="matrix-grid">
+                    {lastResult.matrixB.map((row, r) => (
+                      <div key={r} className="matrix-row">
+                        {row.map((val, c) => (
+                          <span key={c} className="matrix-cell">{val}</span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="matrix-op">=</div>
+
+                <div className="matrix-box result">
+                  <span className="matrix-name">Result</span>
+                  <div className="matrix-grid">
+                    {lastResult.result.map((row, r) => (
+                      <div key={r} className="matrix-row">
+                        {row.map((val, c) => (
+                          <span key={c} className="matrix-cell">{val}</span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="log-container">
+            <h3>Activity Log</h3>
+            <div className="log">
+              {log.length === 0 && <div className="log-entry dim">Waiting for connection...</div>}
+              {log.map((entry, i) => (
+                <div key={i} className="log-entry">{entry}</div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       <Leaderboard />
-
-      {lastResult && (
-        <div className="visualizer-container">
-          <h3>Live Matrix Compute Visualizer</h3>
-          <div className="matrices-wrapper">
-            <div className="matrix-box">
-              <span className="matrix-name">A</span>
-              <div className="matrix-grid">
-                {lastResult.matrixA.map((row, r) => (
-                  <div key={r} className="matrix-row">
-                    {row.map((val, c) => (
-                      <span key={c} className="matrix-cell">{val}</span>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="matrix-op">×</div>
-
-            <div className="matrix-box">
-              <span className="matrix-name">B</span>
-              <div className="matrix-grid">
-                {lastResult.matrixB.map((row, r) => (
-                  <div key={r} className="matrix-row">
-                    {row.map((val, c) => (
-                      <span key={c} className="matrix-cell">{val}</span>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="matrix-op">=</div>
-
-            <div className="matrix-box result">
-              <span className="matrix-name">Result</span>
-              <div className="matrix-grid">
-                {lastResult.result.map((row, r) => (
-                  <div key={r} className="matrix-row">
-                    {row.map((val, c) => (
-                      <span key={c} className="matrix-cell">{val}</span>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="log-container">
-        <h3>Activity Log</h3>
-        <div className="log">
-          {log.length === 0 && <div className="log-entry dim">Waiting for connection...</div>}
-          {log.map((entry, i) => (
-            <div key={i} className="log-entry">{entry}</div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

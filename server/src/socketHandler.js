@@ -147,7 +147,8 @@ function markBusy(socketId) {
 /** Mark a node as idle and trigger dispatch checks */
 function markIdle(socketId, io) {
   const node = nodes.get(socketId);
-  if (node) node.status = 'idle';
+  if (!node || node.status === 'unauthenticated') return;
+  node.status = 'idle';
   // demand-driven: immediately try to hand out queued work
   drainRequeued(io);
   tryDispatchNext(io);
@@ -156,7 +157,8 @@ function markIdle(socketId, io) {
 /** Mark idle WITHOUT triggering dispatch (avoids recursion in timeout handler) */
 function markIdleSilent(socketId) {
   const node = nodes.get(socketId);
-  if (node) node.status = 'idle';
+  if (!node || node.status === 'unauthenticated') return;
+  node.status = 'idle';
 }
 
 /** Get the fastest idle node by avgMsPerRow (lowest = fastest) */
@@ -311,6 +313,11 @@ function dispatchTask(io, task, idleNodeIds) {
       totalRows,
     };
 
+    if (!node || node.status === 'unauthenticated') {
+      console.warn(`[dispatch] Refusing to send chunk to unauthenticated socket ${socketId}`);
+      continue;
+    }
+
     markBusy(socketId);
     io.to(socketId).emit('task_chunk', payload);
     chunkIdx++;
@@ -402,6 +409,11 @@ function reassignChunk(taskId, chunkId, socketId, io) {
     rowCount: meta.rowCount,
     totalRows: task.totalRows,
   };
+
+  if (!replacementNode || replacementNode.status === 'unauthenticated') {
+    console.warn(`[reassign] Refusing to reassign chunk to unauthenticated socket ${socketId}`);
+    return;
+  }
 
   markBusy(socketId);
   io.to(socketId).emit('task_chunk', payload);
@@ -681,7 +693,7 @@ function setupSocketHandler(io) {
       }
     }
 
-    // register this node as idle
+    // register this node
     nodes.set(socket.id, {
       id: socket.id,
       userId: user ? user.id : null,
@@ -689,7 +701,7 @@ function setupSocketHandler(io) {
       connectedAt: new Date(),
       tasksCompleted: 0,
       credits: user ? user.credits : 0,
-      status: 'idle',
+      status: user ? 'idle' : 'unauthenticated',
     });
 
     console.log(`[node+] ${socket.id} (${user ? user.username : 'anonymous'}) connected (${nodes.size} total)`);
