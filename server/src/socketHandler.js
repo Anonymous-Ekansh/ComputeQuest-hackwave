@@ -82,6 +82,44 @@ async function saveUsers(usersData) {
   }
 }
 
+// ── atomic credit updates ────────────────────────────────────────────────────
+
+let writeQueue = Promise.resolve();
+
+async function incrementUserCredits(userId, amount) {
+  if (supabase) {
+    const { data, error } = await supabase.rpc('increment_credits', {
+      user_id: userId,
+      amount: amount
+    });
+    
+    if (error) throw error;
+    // data should contain { credits, total_contributed }
+    // supabase.rpc returns an array of objects when returning a table/record
+    return data && data.length > 0 ? data[0] : null;
+  }
+
+  // Local fallback with an in-memory lock/queue to prevent interleaved writes
+  return new Promise((resolve, reject) => {
+    writeQueue = writeQueue.then(async () => {
+      try {
+        const usersList = await loadUsers();
+        const dbUser = usersList.find(u => u.id === userId);
+        if (dbUser) {
+          dbUser.credits = (dbUser.credits || 0) + amount;
+          dbUser.total_contributed = (dbUser.total_contributed || 0) + amount;
+          await saveUsers(usersList);
+          resolve({ credits: dbUser.credits, total_contributed: dbUser.total_contributed });
+        } else {
+          reject(new Error(`User ${userId} not found`));
+        }
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
 // ── state stores ─────────────────────────────────────────────────────────────
 
 // socketId -> { id, userId, username, connectedAt, tasksCompleted, credits, status: 'idle'|'busy' }
@@ -561,20 +599,16 @@ async function tryReassemble(taskId, io) {
       totalCredits = node.credits;
     }
 
-    // Persist to users table if authenticated
+    // Persist to users table if authenticated using atomic increment
     if (userId) {
       try {
-        const usersList = await loadUsers();
-        const dbUser = usersList.find(u => u.id === userId);
-        if (dbUser) {
-          dbUser.credits = (dbUser.credits || 0) + credits;
-          dbUser.total_contributed = (dbUser.total_contributed || 0) + credits;
-          await saveUsers(usersList);
-          totalCredits = dbUser.credits;
+        const updatedTotals = await incrementUserCredits(userId, credits);
+        if (updatedTotals) {
+          totalCredits = updatedTotals.credits;
           if (node) {
-            node.credits = dbUser.credits; // keep in sync
+            node.credits = totalCredits; // keep in sync using authoritative db total
           }
-          console.log(`[credits] Persisted ${credits} credits to user ${username}. Total: ${dbUser.credits}, Lifetime: ${dbUser.total_contributed}`);
+          console.log(`[credits] Persisted ${credits} credits to user ${username}. Total: ${updatedTotals.credits}, Lifetime: ${updatedTotals.total_contributed}`);
         }
       } catch (err) {
         console.error(`[credits] Failed to persist credits for user ${userId}:`, err);
