@@ -1,6 +1,8 @@
 // benchmark.js
 
-async function runDeviceBenchmark() {
+// Note: This benchmark is currently for frontend display ONLY. 
+// Integration into server-side task allocation logic is planned for a later stage.
+export async function runDeviceBenchmark() {
     console.log("Starting hardware evaluation...");
 
     // 1. Detect Logical CPU Cores
@@ -31,7 +33,8 @@ function measureNetworkLatency() {
     return new Promise((resolve) => {
         const start = performance.now();
         // Replacing with your actual WebSocket ping or server health endpoint
-        fetch('/ping', { cache: 'no-store' })
+        const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+        fetch(serverUrl + '/', { cache: 'no-store' })
             .then(() => {
                 const duration = performance.now() - start;
                 resolve(duration);
@@ -45,8 +48,8 @@ function measureNetworkLatency() {
 
 function runStressTest() {
     return new Promise((resolve) => {
-        // Create a worker from our worker file
-        const worker = new Worker('stress-worker.js');
+        // Create a worker from our worker file (Vite module syntax)
+        const worker = new Worker(new URL('./workers/stress-worker.js', import.meta.url), { type: 'module' });
         
         // Start the test
         worker.postMessage({ type: 'START_BENCHMARK', durationMs: 2000 });

@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import WorkerManager from './WorkerManager';
 import Leaderboard from './Leaderboard';
+import { runDeviceBenchmark } from './benchmark';
 import './App.css';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL;
@@ -30,7 +31,24 @@ function App() {
   // Progress states
   const [taskProgress, setTaskProgress] = useState(null);
 
+  // Benchmark states
+  const [deviceBenchmark, setDeviceBenchmark] = useState(null);
+  const [isBenchmarking, setIsBenchmarking] = useState(false);
+
   const socketRef = useRef(null);
+
+  useEffect(() => {
+    if (userInfo.isAuthenticated && connected && !deviceBenchmark && !isBenchmarking) {
+      setIsBenchmarking(true);
+      runDeviceBenchmark().then(result => {
+        setDeviceBenchmark(result);
+        setIsBenchmarking(false);
+      }).catch(err => {
+        console.error('Benchmark failed:', err);
+        setIsBenchmarking(false);
+      });
+    }
+  }, [userInfo.isAuthenticated, connected, deviceBenchmark, isBenchmarking]);
 
   // helper to add a log entry
   function addLog(msg) {
@@ -297,6 +315,17 @@ function App() {
       )}
 
       <Leaderboard />
+
+      {/* Device Benchmark Footer */}
+      {userInfo.isAuthenticated && (isBenchmarking || deviceBenchmark) && (
+        <div className="benchmark-footer" style={{ textAlign: 'center', marginTop: '20px', paddingBottom: '20px', fontSize: '0.85rem', color: '#64748b' }}>
+          {isBenchmarking ? (
+            <span>Benchmarking device…</span>
+          ) : deviceBenchmark ? (
+            <span>Device profile: {deviceBenchmark.cores} cores · {deviceBenchmark.latency.toFixed(0)}ms latency · {(deviceBenchmark.computeScore / 1000000).toFixed(1)}M ops/sec</span>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
