@@ -5,7 +5,7 @@ import WorkerManager from './WorkerManager';
 import Leaderboard from './Leaderboard';
 import './App.css';
 
-const SERVER_URL = 'https://compute-quest-server.onrender.com'; // Fallback for local, we will use the actual domain if deployed, or keep dynamic if we want
+const SERVER_URL = import.meta.env.VITE_SERVER_URL;
 
 function App() {
   const [connected, setConnected] = useState(false);

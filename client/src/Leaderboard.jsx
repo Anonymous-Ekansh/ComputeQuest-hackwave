@@ -6,7 +6,7 @@ const Leaderboard = () => {
 
   const fetchLeaderboard = async () => {
     try {
-      const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://compute-quest-server.onrender.com';
+      const SERVER_URL = import.meta.env.VITE_SERVER_URL;
       const response = await fetch(`${SERVER_URL}/api/leaderboard`);
       if (response.ok) {
         const data = await response.json();

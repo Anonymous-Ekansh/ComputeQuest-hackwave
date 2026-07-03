@@ -17,8 +17,8 @@ const { createClient } = require('@supabase/supabase-js');
 // ── database connection (Supabase REST API / JSON Fallback) ──────────────────
 
 let supabase = null;
-const supabaseUrl = process.env.SUPABASE_URL || 'https://wammblbodauhydrlwfwt.supabase.co';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhbW1ibGJvZGF1aHlkcmx3Znd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMDU5MDMsImV4cCI6MjA5ODU4MTkwM30.IDLDnCvaFcWwthdP_O2zBM6usrwduJLdkWq5qz5QhNY';
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
 if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
@@ -618,7 +618,7 @@ function setupSocketHandler(io) {
       const token = socket.handshake.auth.token;
       try {
         const { OAuth2Client } = require('google-auth-library');
-        const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '88447063157-ouco5qlke73cdffrvi88e2mc3f65i65s.apps.googleusercontent.com';
+        const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
         const client = new OAuth2Client(GOOGLE_CLIENT_ID);
         
         const ticket = await client.verifyIdToken({
