@@ -480,6 +480,17 @@ function verifyChunkResult(task, chunkMeta, resultRows) {
   const cols = matrixB[0].length;
   const failures = [];
 
+  // ── untrusted client input validation ──
+  // ensure the payload matches the expected dimensions before indexing
+  if (!Array.isArray(resultRows) || resultRows.length !== rowCount) {
+    return { ok: false, failures: [{ expected: `${rowCount} rows`, got: 'malformed array length' }] };
+  }
+  for (let r = 0; r < rowCount; r++) {
+    if (!Array.isArray(resultRows[r]) || resultRows[r].length !== cols) {
+      return { ok: false, failures: [{ expected: `${cols} cols`, got: 'malformed row length' }] };
+    }
+  }
+
   const checks = Math.min(SPOT_CHECK_COUNT, rowCount * cols);
 
   for (let c = 0; c < checks; c++) {
@@ -722,81 +733,93 @@ function setupSocketHandler(io) {
 
     // handle compute results coming back from a browser
     socket.on('chunk_result', (data) => {
-      const { taskId, chunkId, resultRows, computeMs } = data;
-
-      const task = pendingTasks.get(taskId);
-      if (!task) {
-        markIdle(socket.id, io);
-        return;
-      }
-
-      const chunkMeta = task.chunks.get(chunkId);
-      if (!chunkMeta) {
-        markIdle(socket.id, io);
-        return;
-      }
-
-      // ignore results from a node that was already reassigned away
-      if (chunkMeta.socketId !== socket.id) {
-        console.log(
-          `[result] Ignoring late result from ${socket.id} for ${chunkId} (reassigned to ${chunkMeta.socketId})`,
-        );
-        markIdle(socket.id, io);
-        return;
-      }
-
-      // ── spot-check verification ──
-      const verification = verifyChunkResult(task, chunkMeta, resultRows);
-      if (!verification.ok) {
-        console.warn(
-          `[verify] Chunk ${chunkId} FAILED spot-check:`,
-          verification.failures,
-        );
-
-        chunkMeta.retries++;
-
-        if (chunkMeta.retries > MAX_CHUNK_RETRIES) {
-          failTask(taskId, `Chunk ${chunkId} failed verification ${MAX_CHUNK_RETRIES} times`, io);
+      try {
+        // ── untrusted client input validation ──
+        if (!data || typeof data.taskId !== 'string' || typeof data.chunkId !== 'string' || !Array.isArray(data.resultRows)) {
+          console.warn(`[result] Malformed payload from ${socket.id}`);
           markIdle(socket.id, io);
           return;
         }
 
-        // re-dispatch only this chunk to the same or a different node
+        const { taskId, chunkId, resultRows, computeMs } = data;
+
+        const task = pendingTasks.get(taskId);
+        if (!task) {
+          markIdle(socket.id, io);
+          return;
+        }
+
+        const chunkMeta = task.chunks.get(chunkId);
+        if (!chunkMeta) {
+          markIdle(socket.id, io);
+          return;
+        }
+
+        // ignore results from a node that was already reassigned away
+        if (chunkMeta.socketId !== socket.id) {
+          console.log(
+            `[result] Ignoring late result from ${socket.id} for ${chunkId} (reassigned to ${chunkMeta.socketId})`,
+          );
+          markIdle(socket.id, io);
+          return;
+        }
+
+        // ── spot-check verification ──
+        const verification = verifyChunkResult(task, chunkMeta, resultRows);
+        if (!verification.ok) {
+          console.warn(
+            `[verify] Chunk ${chunkId} FAILED spot-check:`,
+            verification.failures,
+          );
+
+          chunkMeta.retries++;
+
+          if (chunkMeta.retries > MAX_CHUNK_RETRIES) {
+            failTask(taskId, `Chunk ${chunkId} failed verification ${MAX_CHUNK_RETRIES} times`, io);
+            markIdle(socket.id, io);
+            return;
+          }
+
+          // re-dispatch only this chunk to the same or a different node
+          console.log(
+            `[verify] Re-dispatching chunk ${chunkId} (retry ${chunkMeta.retries}/${MAX_CHUNK_RETRIES})`,
+          );
+          markIdleSilent(socket.id);
+          const target = getFastestIdleNode() || socket.id;
+          reassignChunk(taskId, chunkId, target, io);
+          return;
+        }
+
+        // ── verification passed — accept result ──
+
+        // update performance map
+        const msPerRow = computeMs / chunkMeta.rowCount;
+        const prev = nodePerformance.get(socket.id);
+        if (prev) {
+          prev.avgMsPerRow = prev.avgMsPerRow * 0.7 + msPerRow * 0.3;
+          prev.samples++;
+        } else {
+          nodePerformance.set(socket.id, { avgMsPerRow: msPerRow, samples: 1 });
+        }
+
+        // store result rows for reassembly
+        task.results.set(chunkId, { rows: resultRows, computeMs });
+
         console.log(
-          `[verify] Re-dispatching chunk ${chunkId} (retry ${chunkMeta.retries}/${MAX_CHUNK_RETRIES})`,
+          `[result] ${socket.id} finished chunk ${chunkId} of ${taskId} in ${computeMs}ms ✓`,
         );
-        markIdleSilent(socket.id);
-        const target = getFastestIdleNode() || socket.id;
-        reassignChunk(taskId, chunkId, target, io);
-        return;
+
+        // emit granular progress
+        emitProgress(taskId, io);
+
+        // node is now idle — this also triggers tryDispatchNext via markIdle
+        markIdle(socket.id, io);
+
+        tryReassemble(taskId, io);
+      } catch (err) {
+        console.error(`[result] Uncaught exception processing chunk_result from ${socket.id}:`, err);
+        markIdle(socket.id, io);
       }
-
-      // ── verification passed — accept result ──
-
-      // update performance map
-      const msPerRow = computeMs / chunkMeta.rowCount;
-      const prev = nodePerformance.get(socket.id);
-      if (prev) {
-        prev.avgMsPerRow = prev.avgMsPerRow * 0.7 + msPerRow * 0.3;
-        prev.samples++;
-      } else {
-        nodePerformance.set(socket.id, { avgMsPerRow: msPerRow, samples: 1 });
-      }
-
-      // store result rows for reassembly
-      task.results.set(chunkId, { rows: resultRows, computeMs });
-
-      console.log(
-        `[result] ${socket.id} finished chunk ${chunkId} of ${taskId} in ${computeMs}ms ✓`,
-      );
-
-      // emit granular progress
-      emitProgress(taskId, io);
-
-      // node is now idle — this also triggers tryDispatchNext via markIdle
-      markIdle(socket.id, io);
-
-      tryReassemble(taskId, io);
     });
 
     socket.on('disconnect', () => {
