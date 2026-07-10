@@ -1110,12 +1110,12 @@ function setupSocketHandler(io) {
         // validate client claim matches server simulation
         if (won !== serverSaysWon) {
           console.warn(`[battle] MISMATCH: ${node.username} claimed ${won ? 'win' : 'loss'} but server says ${serverSaysWon ? 'win' : 'loss'}`);
-          socket.emit('battle:result_confirmed', { success: false, reason: 'result_mismatch' });
-          return;
+          // We no longer strictly reject mismatches because the client has a manual attack mechanic 
+          // that the server's pure auto-attack simulation cannot account for.
         }
 
         // update trophies
-        const delta = serverSaysWon ? TROPHY_WIN : TROPHY_LOSS;
+        const delta = won ? TROPHY_WIN : TROPHY_LOSS;
         const newTrophies = Math.max(0, currentTrophies + delta);
 
         if (supabase) {
@@ -1130,7 +1130,7 @@ function setupSocketHandler(io) {
           }
         }
 
-        console.log(`[battle] ${node.username} ${serverSaysWon ? 'WON' : 'LOST'}: ${currentTrophies} → ${newTrophies} (${delta > 0 ? '+' : ''}${delta})`);
+        console.log(`[battle] ${node.username} ${won ? 'WON' : 'LOST'}: ${currentTrophies} → ${newTrophies} (${delta > 0 ? '+' : ''}${delta})`);
 
         // check for tier escalation toast
         let tierEscalation = null;

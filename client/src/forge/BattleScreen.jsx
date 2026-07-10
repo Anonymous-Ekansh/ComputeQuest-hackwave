@@ -587,13 +587,19 @@ export default function BattleScreen({
 
           <div className="trophy-change">
             <span className="trophy-icon-large">Trophies:</span>
-            {serverConfirmed && confirmedData?.success ? (
-              <div className="trophy-delta">
-                <span className={`delta-number ${delta > 0 ? 'positive' : 'negative'}`}>
-                  {delta > 0 ? `+${delta}` : delta}
-                </span>
-                <span className="new-trophy-count">{confirmedData.trophies} trophies</span>
-              </div>
+            {serverConfirmed ? (
+              confirmedData?.success ? (
+                <div className="trophy-delta">
+                  <span className={`delta-number ${delta > 0 ? 'positive' : 'negative'}`}>
+                    {delta > 0 ? `+${delta}` : delta}
+                  </span>
+                  <span className="new-trophy-count">{confirmedData.trophies} trophies</span>
+                </div>
+              ) : (
+                <div className="trophy-error">
+                  <span className="error-text">Result failed: {confirmedData?.reason}</span>
+                </div>
+              )
             ) : (
               <div className="trophy-pending">
                 <span className="spinner small"></span>
