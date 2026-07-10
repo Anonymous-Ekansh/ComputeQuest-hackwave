@@ -290,9 +290,25 @@
   background: rgba(168, 85, 247, 0.15);
 }
 
-.card-icon {
-  font-size: 2rem;
+/* Character portrait frame */
+.card-character-frame {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,255,255,0.05) 0%, transparent 70%);
+  border: 2px solid var(--type-color, #818cf8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin: 4px 0;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--type-color, #818cf8) 40%, transparent),
+              inset 0 0 8px color-mix(in srgb, var(--type-color, #818cf8) 20%, transparent);
+}
+
+.card-character-glyph {
+  font-size: 2.2rem;
+  line-height: 1;
+  filter: drop-shadow(0 0 4px var(--type-color, #818cf8));
 }
 
 .card-name {
