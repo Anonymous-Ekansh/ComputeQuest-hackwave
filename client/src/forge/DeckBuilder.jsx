@@ -5,7 +5,7 @@ import './DeckBuilder.css';
 
 const DECK_SIZE = 4;
 
-export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle, localUpgrades, onUpgrade }) {
+export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle, localUpgrades, isEligibleForUpgrade, onUpgrade }) {
   const [deckSlots, setDeckSlots] = useState([null, null, null, null]);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
@@ -21,6 +21,12 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle, l
       attack: baseCard.attack + upg.attack, 
       defense: baseCard.defense + upg.defense 
     };
+  };
+
+  const getUpgradesCount = (baseCard) => {
+    if (!baseCard) return 0;
+    const upg = localUpgrades[baseCard.id] || { attack: 0, defense: 0 };
+    return upg.attack + upg.defense;
   };
 
   useEffect(() => {
@@ -161,7 +167,8 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle, l
                 <GameCard
                   card={getUpgradedCard(baseCard)}
                   state="owned"
-                  onUpgrade={onUpgrade}
+                  onUpgrade={isEligibleForUpgrade ? onUpgrade : undefined}
+                  upgradesCount={getUpgradesCount(baseCard)}
                   className={inDeck ? 'dimmed' : ''}
                   onClick={!inDeck ? () => addToDeck(baseCard) : undefined}
                 />

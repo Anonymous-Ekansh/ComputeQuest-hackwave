@@ -33,7 +33,7 @@ if (supabaseUrl && supabaseKey) {
 async function loadUsers() {
   if (supabase) {
     try {
-      const { data, error } = await supabase.from('users').select('id, username, credits, total_contributed, trophies');
+      const { data, error } = await supabase.from('users').select('id, username, credits, total_contributed, trophies, can_upgrade');
       if (error) throw error;
       return data || [];
     } catch (err) {
@@ -56,18 +56,27 @@ async function loadUsers() {
 // ── Forge game data helpers ──────────────────────────────────────────────────
 
 async function loadUserGameData(userId) {
-  if (!supabase) return { ownedCards: [], savedDeck: [] };
+  if (!supabase) return { ownedCards: [], savedDeck: [], upgrades: {} };
   try {
-    const [cardsRes, deckRes] = await Promise.all([
+    const [cardsRes, deckRes, upgradesRes] = await Promise.all([
       supabase.from('user_cards').select('card_id').eq('user_id', userId),
       supabase.from('user_decks').select('card_ids').eq('user_id', userId).single(),
+      supabase.from('user_card_upgrades').select('card_id, attack_upgrades, defense_upgrades').eq('user_id', userId),
     ]);
     const ownedCards = cardsRes.data ? cardsRes.data.map(r => r.card_id) : [];
     const savedDeck = (deckRes.data && deckRes.data.card_ids) ? deckRes.data.card_ids : [];
-    return { ownedCards, savedDeck };
+    
+    const upgrades = {};
+    if (upgradesRes.data) {
+      for (const row of upgradesRes.data) {
+        upgrades[row.card_id] = { attack: row.attack_upgrades || 0, defense: row.defense_upgrades || 0 };
+      }
+    }
+    
+    return { ownedCards, savedDeck, upgrades };
   } catch (err) {
     console.error('[game] Failed to load game data for', userId, err.message || err);
-    return { ownedCards: [], savedDeck: [] };
+    return { ownedCards: [], savedDeck: [], upgrades: {} };
   }
 }
 
@@ -92,7 +101,8 @@ async function saveUsers(usersData) {
           id: u.id,
           username: u.username,
           credits: u.credits,
-          total_contributed: u.total_contributed || 0
+          total_contributed: u.total_contributed || 0,
+          can_upgrade: u.can_upgrade || false
         })),
         { onConflict: 'id' }
       );
@@ -762,7 +772,8 @@ function setupSocketHandler(io) {
           user = {
             id: dbUser.id,
             username: dbUser.username,
-            credits: dbUser.credits || 0
+            credits: dbUser.credits || 0,
+            can_upgrade: dbUser.can_upgrade || false
           };
           console.log(`[auth] Google User ${dbUser.username} connected on socket ${socket.id}`);
         }
@@ -795,15 +806,18 @@ function setupSocketHandler(io) {
         username: user.username,
         credits: user.credits,
         isAuthenticated: true,
+        isEligibleForUpgrade: user.can_upgrade,
         trophies,
         ownedCards: gameData.ownedCards,
         savedDeck: gameData.savedDeck,
+        upgrades: gameData.upgrades,
       });
     } else {
       socket.emit('user_info', {
         username: 'Anonymous Node',
         credits: 0,
         isAuthenticated: false,
+        isEligibleForUpgrade: false,
       });
     }
 
@@ -1065,9 +1079,11 @@ function setupSocketHandler(io) {
           username: node.username,
           credits: node.credits,
           isAuthenticated: true,
+          isEligibleForUpgrade: node.userId ? (await loadUsers()).find(u => u.id === node.userId)?.can_upgrade : false,
           trophies,
           ownedCards: gameData.ownedCards,
           savedDeck: gameData.savedDeck,
+          upgrades: gameData.upgrades,
         });
       } catch (err) {
         console.error('[deck] Uncaught error:', err);
@@ -1091,8 +1107,18 @@ function setupSocketHandler(io) {
           return;
         }
 
-        // resolve player deck to full card objects
-        const playerDeck = gameData.savedDeck.map(id => CARD_MAP[id]).filter(Boolean);
+        // resolve player deck to full card objects and apply upgrades
+        const playerDeck = gameData.savedDeck.map(id => {
+          const baseCard = CARD_MAP[id];
+          if (!baseCard) return null;
+          const upg = (gameData.upgrades || {})[id] || { attack: 0, defense: 0 };
+          return {
+            ...baseCard,
+            attack: baseCard.attack + upg.attack,
+            defense: baseCard.defense + upg.defense
+          };
+        }).filter(Boolean);
+        
         if (playerDeck.length !== DECK_SIZE) {
           socket.emit('battle:result_confirmed', { success: false, reason: 'invalid_deck_cards' });
           return;
@@ -1152,13 +1178,118 @@ function setupSocketHandler(io) {
           username: node.username,
           credits: node.credits,
           isAuthenticated: true,
+          isEligibleForUpgrade: node.userId ? (await loadUsers()).find(u => u.id === node.userId)?.can_upgrade : false,
           trophies: newTrophies,
           ownedCards: gameData.ownedCards,
           savedDeck: gameData.savedDeck,
+          upgrades: gameData.upgrades,
         });
       } catch (err) {
         console.error('[battle] Uncaught error:', err);
         socket.emit('battle:result_confirmed', { success: false, reason: 'server_error' });
+      }
+    });
+
+    // Upgrades: handle card upgrade
+    socket.on('card:upgrade', async ({ cardId, statType }) => {
+      try {
+        const node = nodes.get(socket.id);
+        if (!node || !node.userId) {
+          socket.emit('card:upgrade_result', { success: false, reason: 'not_authenticated' });
+          return;
+        }
+
+        const usersList = await loadUsers();
+        const dbUser = usersList.find(u => u.id === node.userId);
+        if (!dbUser || !dbUser.can_upgrade) {
+          socket.emit('card:upgrade_result', { success: false, reason: 'not_eligible' });
+          return;
+        }
+
+        if (statType !== 'attack' && statType !== 'defense') {
+          socket.emit('card:upgrade_result', { success: false, reason: 'invalid_stat' });
+          return;
+        }
+
+        const card = CARD_MAP[cardId];
+        if (!card) {
+          socket.emit('card:upgrade_result', { success: false, reason: 'invalid_card' });
+          return;
+        }
+
+        if (dbUser.credits < 1000) {
+          socket.emit('card:upgrade_result', { success: false, reason: 'insufficient_crystals' });
+          return;
+        }
+
+        if (supabase) {
+          // Check ownership
+          const { data: existing } = await supabase.from('user_cards').select('card_id').eq('user_id', node.userId).eq('card_id', cardId).single();
+          if (!existing) {
+            socket.emit('card:upgrade_result', { success: false, reason: 'card_not_owned' });
+            return;
+          }
+
+          // Fetch current upgrades
+          const { data: upgData } = await supabase.from('user_card_upgrades').select('attack_upgrades, defense_upgrades').eq('user_id', node.userId).eq('card_id', cardId).single();
+          const currentAttack = upgData ? (upgData.attack_upgrades || 0) : 0;
+          const currentDefense = upgData ? (upgData.defense_upgrades || 0) : 0;
+
+          if (currentAttack + currentDefense >= 10) {
+            socket.emit('card:upgrade_result', { success: false, reason: 'max_upgrades_reached' });
+            return;
+          }
+
+          // Deduct credits
+          const { data: deducted, error: deductErr } = await supabase.from('users').update({ credits: dbUser.credits - 1000 }).eq('id', node.userId).gte('credits', 1000).select('credits').single();
+          if (deductErr || !deducted) {
+            socket.emit('card:upgrade_result', { success: false, reason: 'insufficient_crystals' });
+            return;
+          }
+          node.credits = deducted.credits;
+
+          // Upsert upgrade
+          const newAttack = statType === 'attack' ? currentAttack + 1 : currentAttack;
+          const newDefense = statType === 'defense' ? currentDefense + 1 : currentDefense;
+          
+          await supabase.from('user_card_upgrades').upsert({
+            user_id: node.userId,
+            card_id: cardId,
+            attack_upgrades: newAttack,
+            defense_upgrades: newDefense,
+            updated_at: new Date().toISOString()
+          });
+
+          // Write audit log
+          await supabase.from('upgrade_audit_logs').insert({
+            user_id: node.userId,
+            card_id: cardId,
+            stat_upgraded: statType,
+            cost: 1000
+          });
+
+          socket.emit('card:upgrade_result', { success: true });
+        } else {
+          socket.emit('card:upgrade_result', { success: false, reason: 'supabase_required_for_upgrades' });
+          return;
+        }
+
+        const gameData = await loadUserGameData(node.userId);
+        const trophies = await loadUserTrophies(node.userId);
+        socket.emit('user_info', {
+          username: node.username,
+          credits: node.credits,
+          isAuthenticated: true,
+          isEligibleForUpgrade: true,
+          trophies,
+          ownedCards: gameData.ownedCards,
+          savedDeck: gameData.savedDeck,
+          upgrades: gameData.upgrades,
+        });
+
+      } catch (err) {
+        console.error('[upgrade] Uncaught error:', err);
+        socket.emit('card:upgrade_result', { success: false, reason: 'server_error' });
       }
     });
 

@@ -17,6 +17,7 @@ export default function GameCard({
   className = '',
   showCost = false,
   compact = false,
+  upgradesCount = 0,
 }) {
   if (!card) return null;
 
@@ -74,17 +75,24 @@ export default function GameCard({
 
       {state === 'owned' && onUpgrade && (
         <div className="card-upgrade-overlay">
+          <div className="upgrade-limit-text" style={{ fontSize: '0.7rem', color: '#cbd5e1', marginBottom: '4px' }}>
+            {upgradesCount}/10 used
+          </div>
           <button 
             className="upgrade-btn"
             onClick={(e) => { e.stopPropagation(); onUpgrade(card.id, 'attack'); }}
+            disabled={upgradesCount >= 10}
+            style={upgradesCount >= 10 ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
           >
-            +1 ATK (1000)
+            +1 ATK (10 Crystals)
           </button>
           <button 
             className="upgrade-btn"
             onClick={(e) => { e.stopPropagation(); onUpgrade(card.id, 'defense'); }}
+            disabled={upgradesCount >= 10}
+            style={upgradesCount >= 10 ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
           >
-            +1 DEF (1000)
+            +1 DEF (10 Crystals)
           </button>
         </div>
       )}

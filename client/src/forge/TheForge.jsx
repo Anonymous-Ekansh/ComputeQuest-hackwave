@@ -14,39 +14,16 @@ const TABS = [
 export default function TheForge({ socket, userInfo, isAuthenticated }) {
   const [activeTab, setActiveTab] = useState('shop');
   
-  const [localSpentCredits, setLocalSpentCredits] = useState(0);
-  const [localUpgrades, setLocalUpgrades] = useState(userInfo?.upgrades || {});
-
-  const baseCredits = userInfo?.credits || 0;
-  const currentCredits = baseCredits - localSpentCredits;
+  const currentCredits = userInfo?.credits || 0;
   
   const crystals = Math.floor(currentCredits / CREDITS_PER_CRYSTAL);
   const creditsToNext = currentCredits % CREDITS_PER_CRYSTAL;
   const trophies = userInfo?.trophies || 0;
   const ownedCards = userInfo?.ownedCards || [];
   const savedDeck = userInfo?.savedDeck || [];
+  const upgrades = userInfo?.upgrades || {};
 
   const handleUpgrade = (cardId, statType) => {
-    if (currentCredits < 1000) {
-      alert("Not enough credits! (1000 required)");
-      return;
-    }
-    
-    const upg = localUpgrades[cardId] || { attack: 0, defense: 0 };
-    if (upg.attack + upg.defense >= 10) {
-      alert("Maximum of 10 upgrades reached for this card.");
-      return;
-    }
-
-    setLocalSpentCredits(prev => prev + 1000);
-    setLocalUpgrades(prev => ({
-      ...prev,
-      [cardId]: {
-        attack: (prev[cardId]?.attack || 0) + (statType === 'attack' ? 1 : 0),
-        defense: (prev[cardId]?.defense || 0) + (statType === 'defense' ? 1 : 0)
-      }
-    }));
-
     socket.emit('card:upgrade', { cardId, statType });
   };
 
@@ -112,8 +89,7 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
             socket={socket}
             crystals={crystals}
             ownedCards={ownedCards}
-            localUpgrades={localUpgrades}
-            onUpgrade={handleUpgrade}
+            localUpgrades={upgrades}
           />
         )}
         {activeTab === 'deck' && (
@@ -121,7 +97,8 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
             socket={socket}
             ownedCards={ownedCards}
             savedDeck={savedDeck}
-            localUpgrades={localUpgrades}
+            localUpgrades={upgrades}
+            isEligibleForUpgrade={userInfo?.isEligibleForUpgrade}
             onUpgrade={handleUpgrade}
             onBattle={() => setActiveTab('battle')}
           />
@@ -132,7 +109,7 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
             savedDeck={savedDeck}
             trophies={trophies}
             ownedCards={ownedCards}
-            localUpgrades={localUpgrades} 
+            localUpgrades={upgrades} 
             onEditDeck={() => setActiveTab('deck')}
             onVisitShop={() => setActiveTab('shop')}
           />
