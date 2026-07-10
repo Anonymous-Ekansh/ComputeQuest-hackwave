@@ -942,20 +942,43 @@ function setupSocketHandler(io) {
           return;
         }
 
-        // atomic transaction: deduct credits + insert card
-        const updatedTotals = await incrementUserCredits(node.userId, -card.cost);
-        if (updatedTotals) {
-          node.credits = updatedTotals.credits;
+        // deduct credits (never use negative amounts with incrementUserCredits)
+        if (supabase) {
+          // Atomic deduct: only succeeds if credits >= cost
+          const { data: deducted, error: deductErr } = await supabase
+            .from('users')
+            .update({ credits: dbUser.credits - card.cost })
+            .eq('id', node.userId)
+            .gte('credits', card.cost)
+            .select('credits')
+            .single();
+
+          if (deductErr || !deducted) {
+            socket.emit('shop:unlock_result', { success: false, reason: 'insufficient_crystals' });
+            return;
+          }
+          node.credits = deducted.credits;
+        } else {
+          // Local JSON fallback
+          dbUser.credits = dbUser.credits - card.cost;
+          const allUsers = await loadUsers();
+          const localUser = allUsers.find(u => u.id === node.userId);
+          if (localUser) {
+            localUser.credits = dbUser.credits;
+            await saveUsers(allUsers);
+          }
+          node.credits = dbUser.credits;
         }
 
+        // insert card ownership
         if (supabase) {
           const { error: insertError } = await supabase
             .from('user_cards')
             .insert({ user_id: node.userId, card_id: cardId });
           if (insertError) {
-            // rollback credits
+            // rollback: re-add the cost (positive amount)
             await incrementUserCredits(node.userId, card.cost);
-            if (updatedTotals) node.credits = updatedTotals.credits + card.cost;
+            node.credits = node.credits + card.cost;
             console.error('[shop] Failed to insert card:', insertError.message);
             socket.emit('shop:unlock_result', { success: false, reason: 'server_error' });
             return;
