@@ -752,7 +752,7 @@ function setupSocketHandler(io) {
             dbUser = {
               id: userId,
               username: googleName || googleEmail || 'Google User',
-              credits: 0
+              credits: 5000 // 5000 raw credits = 50 crystals
             };
             usersList.push(dbUser);
             await saveUsers(usersList);
