@@ -13,13 +13,43 @@ const TABS = [
 
 export default function TheForge({ socket, userInfo, isAuthenticated }) {
   const [activeTab, setActiveTab] = useState('shop');
+  
+  // Local state to manage instantaneous UI updates
+  const [localSpentCredits, setLocalSpentCredits] = useState(0);
+  const [localUpgrades, setLocalUpgrades] = useState(userInfo?.upgrades || {});
 
-  const credits = userInfo.credits || 0;
-  const crystals = Math.floor(credits / CREDITS_PER_CRYSTAL);
-  const creditsToNext = credits % CREDITS_PER_CRYSTAL;
-  const trophies = userInfo.trophies || 0;
-  const ownedCards = userInfo.ownedCards || [];
-  const savedDeck = userInfo.savedDeck || [];
+  const baseCredits = userInfo?.credits || 0;
+  const currentCredits = baseCredits - localSpentCredits;
+  
+  const crystals = Math.floor(currentCredits / CREDITS_PER_CRYSTAL);
+  const creditsToNext = currentCredits % CREDITS_PER_CRYSTAL;
+  const trophies = userInfo?.trophies || 0;
+  const ownedCards = userInfo?.ownedCards || [];
+  const savedDeck = userInfo?.savedDeck || [];
+
+  const handleUpgrade = (cardId, statType) => {
+    if (currentCredits < 1000) {
+      alert("Not enough credits! (1000 required)");
+      return;
+    }
+    
+    const upg = localUpgrades[cardId] || { attack: 0, defense: 0 };
+    if (upg.attack + upg.defense >= 10) {
+      alert("Maximum of 10 upgrades reached for this card.");
+      return;
+    }
+
+    setLocalSpentCredits(prev => prev + 1000);
+    setLocalUpgrades(prev => ({
+      ...prev,
+      [cardId]: {
+        attack: (prev[cardId]?.attack || 0) + (statType === 'attack' ? 1 : 0),
+        defense: (prev[cardId]?.defense || 0) + (statType === 'defense' ? 1 : 0)
+      }
+    }));
+
+    socket.emit('card:upgrade', { cardId, statType });
+  };
 
   if (!isAuthenticated) {
     return (
@@ -41,7 +71,6 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
 
   return (
     <div className="forge">
-      {/* Header bar */}
       <div className="forge-header">
         <div className="forge-title">
           <span className="forge-logo"></span>
@@ -51,7 +80,7 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
           <div className="forge-stat crystals">
             <span className="stat-icon"></span>
             <div className="crystal-display" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.1 }}>
-              <span className="stat-value" key={crystals}>{crystals} crystals</span>
+              <span className="stat-value">{crystals} crystals</span>
               <span style={{ fontSize: '0.6rem', color: '#94a3b8', fontWeight: 'normal' }}>
                 {creditsToNext}/{CREDITS_PER_CRYSTAL} credits
               </span>
@@ -59,13 +88,12 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
           </div>
           <div className="forge-stat trophies">
             <span className="stat-icon"></span>
-            <span className="stat-value" key={trophies}>{trophies}</span>
+            <span className="stat-value">{trophies}</span>
             <span className="stat-label">Trophies</span>
           </div>
         </div>
       </div>
 
-      {/* Tab navigation */}
       <div className="forge-tabs">
         {TABS.map(tab => (
           <button
@@ -79,13 +107,14 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
         ))}
       </div>
 
-      {/* Tab content */}
       <div className="forge-content">
         {activeTab === 'shop' && (
           <CardShop
             socket={socket}
             crystals={crystals}
             ownedCards={ownedCards}
+            localUpgrades={localUpgrades}
+            onUpgrade={handleUpgrade}
           />
         )}
         {activeTab === 'deck' && (
@@ -93,6 +122,8 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
             socket={socket}
             ownedCards={ownedCards}
             savedDeck={savedDeck}
+            localUpgrades={localUpgrades}
+            onUpgrade={handleUpgrade}
             onBattle={() => setActiveTab('battle')}
           />
         )}

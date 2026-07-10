@@ -5,9 +5,9 @@ import './CardShop.css';
 
 const RARITY_FILTERS = ['all', 'common', 'uncommon', 'rare'];
 
-export default function CardShop({ socket, crystals, ownedCards }) {
+export default function CardShop({ socket, crystals, ownedCards, localUpgrades, onUpgrade }) {
   const [filter, setFilter] = useState('all');
-  const [unlocking, setUnlocking] = useState(null); // cardId being unlocked
+  const [unlocking, setUnlocking] = useState(null); 
   const [error, setError] = useState(null);
 
   const ownedSet = new Set(ownedCards || []);
@@ -15,6 +15,16 @@ export default function CardShop({ socket, crystals, ownedCards }) {
   const filteredCards = filter === 'all'
     ? CARD_CATALOG
     : CARD_CATALOG.filter(c => c.rarity === filter);
+
+  const getUpgradedCard = (baseCard) => {
+    if (!baseCard) return null;
+    const upg = localUpgrades[baseCard.id] || { attack: 0, defense: 0 };
+    return { 
+      ...baseCard, 
+      attack: baseCard.attack + upg.attack, 
+      defense: baseCard.defense + upg.defense 
+    };
+  };
 
   function getCardState(card) {
     if (ownedSet.has(card.id)) return 'owned';
@@ -32,7 +42,6 @@ export default function CardShop({ socket, crystals, ownedCards }) {
 
     socket.emit('shop:unlock_card', { cardId: card.id });
 
-    // Listen for result
     const handler = (result) => {
       setUnlocking(null);
       if (!result.success) {
@@ -47,7 +56,6 @@ export default function CardShop({ socket, crystals, ownedCards }) {
     };
     socket.on('shop:unlock_result', handler);
 
-    // Timeout safety
     setTimeout(() => {
       socket.off('shop:unlock_result', handler);
       setUnlocking(null);
@@ -61,7 +69,6 @@ export default function CardShop({ socket, crystals, ownedCards }) {
         <p className="shop-subtitle">Spend crystals earned from computing to unlock cards</p>
       </div>
 
-      {/* Rarity filter */}
       <div className="shop-filters">
         {RARITY_FILTERS.map(f => (
           <button
@@ -79,26 +86,26 @@ export default function CardShop({ socket, crystals, ownedCards }) {
         ))}
       </div>
 
-      {/* Error toast */}
       {error && (
         <div className="shop-error">
           <span>Error: {error}</span>
         </div>
       )}
 
-      {/* Card grid */}
       <div className="shop-grid">
-        {filteredCards.map(card => {
-          const state = getCardState(card);
-          const isUnlocking = unlocking === card.id;
+        {filteredCards.map(baseCard => {
+          const state = getCardState(baseCard);
+          const isUnlocking = unlocking === baseCard.id;
+          const displayCard = getUpgradedCard(baseCard);
 
           return (
-            <div key={card.id} className={`shop-card-wrapper ${isUnlocking ? 'unlocking' : ''}`}>
+            <div key={baseCard.id} className={`shop-card-wrapper ${isUnlocking ? 'unlocking' : ''}`}>
               <GameCard
-                card={card}
+                card={displayCard}
                 state={state}
-                showCost={!ownedSet.has(card.id)}
-                onClick={state === 'affordable' ? () => handleUnlock(card) : undefined}
+                showCost={!ownedSet.has(baseCard.id)}
+                onUpgrade={onUpgrade}
+                onClick={state === 'affordable' ? () => handleUnlock(baseCard) : undefined}
               />
               {isUnlocking && (
                 <div className="unlock-spinner">
@@ -110,7 +117,6 @@ export default function CardShop({ socket, crystals, ownedCards }) {
         })}
       </div>
 
-      {/* Stats */}
       <div className="shop-footer">
         <span>{ownedSet.size} / {CARD_CATALOG.length} cards unlocked</span>
       </div>

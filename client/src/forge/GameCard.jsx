@@ -1,16 +1,3 @@
-/**
- * GameCard — reusable card component for Shop, Deck Builder, and Battle.
- * Shows the character's glyph prominently as a visual portrait.
- *
- * Props:
- *   card       — { id, name, type, attack, defense, rarity, cost, glyph, description }
- *   state      — 'locked' | 'affordable' | 'owned' | 'battle' | 'facedown'
- *   onClick    — optional click handler
- *   className  — optional extra classes ('winner', 'loser', 'selected')
- *   showCost   — whether to show the crystal cost badge (default: false)
- *   compact    — smaller version for deck slots
- */
-
 const TYPE_COLORS = {
   OVERCLOCK: '#f97316',
   COOLANT: '#06b6d4',
@@ -26,6 +13,7 @@ export default function GameCard({
   card,
   state = 'owned',
   onClick,
+  onUpgrade,
   className = '',
   showCost = false,
   compact = false,
@@ -63,33 +51,43 @@ export default function GameCard({
         <span className="card-cost">{card.cost}</span>
       )}
 
-      {/* Character portrait — the hero visual */}
-      <div className="card-character-frame" style={{
-        '--type-color': typeColor,
-      }}>
+      <div className="card-character-frame" style={{ '--type-color': typeColor }}>
         <span className="card-character-glyph">{glyph}</span>
       </div>
 
-      {/* Card name */}
       <span className="card-name">{card.name}</span>
 
-      {/* Type badge */}
       <span className="card-type-badge" data-type={card.type}>
         {card.type}
       </span>
 
-      {/* Rarity stars */}
       <div className="card-rarity">
         {Array.from({ length: maxStars }, (_, i) => (
           <span key={i} className={`card-rarity-star ${i < stars ? '' : 'dim'}`}>★</span>
         ))}
       </div>
 
-      {/* Stats at bottom */}
       <div className="card-stats">
         <span className="card-stat attack">ATK: {card.attack}</span>
         <span className="card-stat defense">DEF: {card.defense}</span>
       </div>
+
+      {state === 'owned' && onUpgrade && (
+        <div className="card-upgrade-overlay">
+          <button 
+            className="upgrade-btn"
+            onClick={(e) => { e.stopPropagation(); onUpgrade(card.id, 'attack'); }}
+          >
+            +1 ATK (1000)
+          </button>
+          <button 
+            className="upgrade-btn"
+            onClick={(e) => { e.stopPropagation(); onUpgrade(card.id, 'defense'); }}
+          >
+            +1 DEF (1000)
+          </button>
+        </div>
+      )}
     </div>
   );
 }

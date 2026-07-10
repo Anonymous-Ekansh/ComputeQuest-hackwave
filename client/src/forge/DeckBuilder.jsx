@@ -5,7 +5,7 @@ import './DeckBuilder.css';
 
 const DECK_SIZE = 4;
 
-export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle }) {
+export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle, localUpgrades, onUpgrade }) {
   const [deckSlots, setDeckSlots] = useState([null, null, null, null]);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
@@ -13,20 +13,28 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle })
   const ownedSet = new Set(ownedCards || []);
   const ownedCardObjects = (ownedCards || []).map(id => CARD_MAP[id]).filter(Boolean);
 
-  // Load saved deck on mount / when savedDeck changes
+  const getUpgradedCard = (baseCard) => {
+    if (!baseCard) return null;
+    const upg = localUpgrades[baseCard.id] || { attack: 0, defense: 0 };
+    return { 
+      ...baseCard, 
+      attack: baseCard.attack + upg.attack, 
+      defense: baseCard.defense + upg.defense 
+    };
+  };
+
   useEffect(() => {
     if (savedDeck && savedDeck.length === DECK_SIZE) {
       setDeckSlots(savedDeck.map(id => CARD_MAP[id] || null));
     }
   }, [savedDeck]);
 
-  // Cards in deck (by id)
   const deckCardIds = new Set(deckSlots.filter(Boolean).map(c => c.id));
 
   function addToDeck(card) {
     const emptyIdx = deckSlots.findIndex(s => s === null);
-    if (emptyIdx === -1) return; // deck full
-    if (deckCardIds.has(card.id)) return; // already in deck
+    if (emptyIdx === -1) return;
+    if (deckCardIds.has(card.id)) return;
     const newSlots = [...deckSlots];
     newSlots[emptyIdx] = card;
     setDeckSlots(newSlots);
@@ -96,7 +104,6 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle })
         <p className="deck-subtitle">Select 4 cards for your battle deck</p>
       </div>
 
-      {/* Deck slots */}
       <div className="deck-slots">
         <div className="deck-slots-label">Your Deck</div>
         <div className="deck-slots-grid">
@@ -108,7 +115,7 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle })
               title={card ? `Click to remove ${card.name}` : `Slot ${idx + 1} — empty`}
             >
               {card ? (
-                <GameCard card={card} state="owned" compact />
+                <GameCard card={getUpgradedCard(card)} state="owned" compact />
               ) : (
                 <div className="deck-slot-placeholder">
                   <span className="slot-number">{idx + 1}</span>
@@ -121,7 +128,6 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle })
         </div>
       </div>
 
-      {/* Actions */}
       <div className="deck-actions">
         <button
           className="deck-save-btn"
@@ -137,28 +143,27 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle })
         )}
       </div>
 
-      {/* Save message */}
       {saveMessage && (
         <div className={`deck-message ${saveMessage.type}`}>
           {saveMessage.type === 'success' ? 'Success:' : 'Error:'} {saveMessage.text}
         </div>
       )}
 
-      {/* Available cards */}
       <div className="deck-available">
         <div className="deck-available-label">
           Your Cards ({ownedCardObjects.length})
         </div>
         <div className="deck-available-grid">
-          {ownedCardObjects.map(card => {
-            const inDeck = deckCardIds.has(card.id);
+          {ownedCardObjects.map(baseCard => {
+            const inDeck = deckCardIds.has(baseCard.id);
             return (
-              <div key={card.id} className={`deck-card-wrapper ${inDeck ? 'in-deck' : ''}`}>
+              <div key={baseCard.id} className={`deck-card-wrapper ${inDeck ? 'in-deck' : ''}`}>
                 <GameCard
-                  card={card}
+                  card={getUpgradedCard(baseCard)}
                   state="owned"
+                  onUpgrade={onUpgrade}
                   className={inDeck ? 'dimmed' : ''}
-                  onClick={!inDeck ? () => addToDeck(card) : undefined}
+                  onClick={!inDeck ? () => addToDeck(baseCard) : undefined}
                 />
                 {inDeck && <span className="in-deck-badge">In Deck</span>}
               </div>
