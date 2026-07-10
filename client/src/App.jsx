@@ -148,23 +148,19 @@ function App() {
         setTasksCompleted(prev => prev + 1);
         addLog(`Computed chunk ${chunkId} (${rowCount} rows) in ${computeMs}ms`);
 
-        console.log(`%c[ComputeQuest] Chunk ${chunkId} done`, 'color: #818cf8; font-weight: bold;');
-        console.log('Result rows:', resultRows);
+        console.log(`%c[ComputeQuest] Chunk ${chunkId} done in ${computeMs}ms`, 'color: #818cf8; font-weight: bold;');
 
         socket.emit('chunk_result', { taskId, chunkId, resultRows, computeMs });
       });
 
       // when the server has reassembled all chunks, show the full result
       socket.on('task:complete', (data) => {
-        const { taskId, matrixA, matrixB, result, totalTimeMs, contributions } = data;
-        setLastResult({ taskId, result, matrixA, matrixB, computeTimeMs: totalTimeMs });
+        const { taskId, totalTimeMs, contributions } = data;
+        setLastResult({ taskId, computeTimeMs: totalTimeMs });
         setTaskProgress(null); // clear progress
         addLog(`Task ${taskId} complete in ${totalTimeMs}ms — ${contributions.length} node(s) contributed`);
 
-        console.log(`%c[ComputeQuest] Task ${taskId} fully assembled`, 'color: #34d399; font-weight: bold;');
-        console.log('Matrix A:'); console.table(matrixA);
-        console.log('Matrix B:'); console.table(matrixB);
-        console.log('Result:');   console.table(result);
+        console.log(`%c[ComputeQuest] Task ${taskId} fully assembled in ${totalTimeMs}ms`, 'color: #34d399; font-weight: bold;');
         console.log('Contributions:', contributions);
       });
 
