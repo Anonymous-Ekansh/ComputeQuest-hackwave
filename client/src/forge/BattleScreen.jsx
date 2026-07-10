@@ -263,16 +263,7 @@ export default function BattleScreen({
           }
         }
 
-        // auto-attack on cooldown when in range
-        if (!manualDidFire && nearDist <= ATTACK_RANGE && now - pf.lastAttackAt >= ATTACK_COOLDOWN) {
-          const damage = dmg(pf, nearest);
-          nearest.hp = Math.max(0, nearest.hp - damage);
-          nearest.hitTimer = now;
-          pf.lastAttackAt = now;
-          pf.lungeDir = Math.atan2(nearest.y - pf.y, nearest.x - pf.x);
-          nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now });
-          if (nearest.hp <= 0) nearest.alive = false;
-        }
+        // Auto-attacks removed: player must manually attack with spacebar
       }
 
       // ── clean up old floating damage numbers ──
