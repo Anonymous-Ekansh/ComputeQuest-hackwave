@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
 * {
   margin: 0;
   padding: 0;
@@ -5,220 +7,81 @@
 }
 
 body {
-  background: #0a0a0f;
+  background: #07080d;
   color: #e0e0e0;
-  font-family: 'Courier New', monospace;
+  font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
   min-height: 100vh;
+  overflow: hidden;
 }
 
-.app {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 48px 24px;
+#root {
+  height: 100vh;
 }
 
-h1 {
-  font-size: 2rem;
+/* ══════════════════════════════════════════════════════════════════════════════
+   Split-Panel Layout — 25% sidebar / 75% main
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Left Sidebar ───────────────────────────────────────────────────────────── */
+.sidebar {
+  width: 320px;
+  min-width: 280px;
+  max-width: 360px;
+  background: #0a0a12;
+  border-right: 1px solid #1a1a28;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex-shrink: 0;
+}
+
+.sidebar-inner {
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sidebar-title {
+  font-size: 1.3rem;
   color: #ffffff;
-  margin-bottom: 4px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
 }
 
 .tagline {
-  color: #666;
-  font-size: 0.85rem;
-  margin-bottom: 32px;
+  color: #555;
+  font-size: 0.78rem;
+  margin-top: -12px;
 }
 
-/* connection status */
-.status-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  background: #111118;
-  border: 1px solid #1a1a25;
-  border-radius: 8px;
-  font-size: 0.85rem;
-  margin-bottom: 24px;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.status-dot.online {
-  background: #22c55e;
-  box-shadow: 0 0 6px #22c55e;
-}
-
-.status-dot.offline {
-  background: #ef4444;
-}
-
-.separator {
-  color: #333;
-}
-
-/* stat cards */
-.stats {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.stat-card {
+/* ── Right Main Panel ───────────────────────────────────────────────────────── */
+.main-panel {
   flex: 1;
-  padding: 20px;
-  background: #111118;
-  border: 1px solid #1a1a25;
-  border-radius: 8px;
-  text-align: center;
-}
-
-.stat-value {
-  font-size: 1.75rem;
-  font-weight: bold;
-  color: #818cf8;
-}
-
-.stat-card:nth-child(2) .stat-value {
-  color: #34d399;
-}
-
-.stat-label {
-  font-size: 0.75rem;
-  color: #555;
-  margin-top: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-/* activity log */
-.log-container h3 {
-  font-size: 0.85rem;
-  color: #555;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 8px;
-}
-
-.log {
-  background: #0d0d14;
-  border: 1px solid #1a1a25;
-  border-radius: 8px;
-  padding: 16px;
-  max-height: 320px;
   overflow-y: auto;
-  font-size: 0.8rem;
-  line-height: 1.6;
+  background: #0a0f1a;
+  position: relative;
 }
 
-.log-entry {
-  color: #8b8ba0;
-}
-
-.log-entry.dim {
-  color: #333;
-}
-
-/* matrix visualizer */
-.visualizer-container {
-  margin-bottom: 24px;
-}
-
-.visualizer-container h3 {
-  font-size: 0.85rem;
-  color: #555;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 8px;
-}
-
-.matrices-wrapper {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  background: #111118;
-  border: 1px solid #1a1a25;
-  border-radius: 8px;
-  padding: 16px;
-  overflow-x: auto;
-}
-
-.matrix-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
-.matrix-name {
-  font-size: 0.75rem;
-  color: #666;
-  font-weight: bold;
-}
-
-.matrix-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: 1px solid #222;
-  padding: 4px;
-  background: #0d0d14;
-  border-radius: 4px;
-}
-
-.matrix-box.result .matrix-grid {
-  border-color: #34d399;
-}
-
-.matrix-row {
-  display: flex;
-  gap: 2px;
-}
-
-.matrix-cell {
-  width: 20px;
-  height: 20px;
-  font-size: 0.65rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #151522;
-  color: #818cf8;
-  border-radius: 2px;
-}
-
-.matrix-box.result .matrix-cell {
-  color: #34d399;
-  background: #0f221c;
-}
-
-.matrix-op {
-  font-size: 1.25rem;
-  color: #444;
-  font-weight: bold;
-  user-select: none;
-}
-
-/* Authentication section */
+/* ── Auth Card ──────────────────────────────────────────────────────────────── */
 .auth-card {
   background: #111118;
   border: 1px solid #1a1a25;
-  border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 24px;
+  border-radius: 10px;
+  padding: 14px;
 }
 
 .auth-card h3 {
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   color: #555;
   text-transform: uppercase;
   letter-spacing: 1px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .auth-fields {
@@ -232,32 +95,16 @@ h1 {
   gap: 8px;
 }
 
-.auth-input {
-  flex: 1;
-  background: #0d0d14;
-  border: 1px solid #222;
-  border-radius: 4px;
-  color: #fff;
-  padding: 8px 12px;
-  font-family: inherit;
-  font-size: 0.8rem;
-}
-
-.auth-input:focus {
-  border-color: #818cf8;
-  outline: none;
-}
-
 .auth-btn {
   background: #818cf8;
   color: #000;
   font-weight: bold;
   border: none;
-  border-radius: 4px;
-  padding: 8px 16px;
+  border-radius: 6px;
+  padding: 7px 14px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   transition: all 0.2s;
 }
 
@@ -276,42 +123,153 @@ h1 {
   color: #fff;
 }
 
-.auth-error {
-  color: #ef4444;
-  font-size: 0.75rem;
-  margin-top: 4px;
-}
-
 .auth-logged-in {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 0.85rem;
+  gap: 8px;
+}
+
+.auth-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .user-meta {
+  color: #e2e8f0;
+  font-size: 0.82rem;
+}
+
+.credit-display {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+.credit-icon {
+  font-size: 0.85rem;
+}
+
+.credit-value {
+  color: #818cf8;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Status Bar ─────────────────────────────────────────────────────────────── */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #111118;
+  border: 1px solid #1a1a25;
+  border-radius: 8px;
+  font-size: 0.78rem;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.online {
+  background: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+}
+
+.status-dot.offline {
+  background: #ef4444;
+}
+
+.separator {
+  color: #333;
+}
+
+/* ── Stat Cards ─────────────────────────────────────────────────────────────── */
+.stats {
+  display: flex;
+  gap: 10px;
+}
+
+.stat-card {
+  flex: 1;
+  padding: 14px 10px;
+  background: #111118;
+  border: 1px solid #1a1a25;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 1.3rem;
+  font-weight: bold;
+  color: #818cf8;
+}
+
+.stat-card:nth-child(2) .stat-value {
   color: #34d399;
 }
 
-/* Progress bar styling */
+.stat-label {
+  font-size: 0.65rem;
+  color: #555;
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── Activity Log ───────────────────────────────────────────────────────────── */
+.log-container h3 {
+  font-size: 0.75rem;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.log {
+  background: #0d0d14;
+  border: 1px solid #1a1a25;
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+}
+
+.log-entry {
+  color: #6b6b80;
+}
+
+.log-entry.dim {
+  color: #333;
+}
+
+/* ── Progress Bar ───────────────────────────────────────────────────────────── */
 .progress-container {
   background: #111118;
   border: 1px solid #1a1a25;
   border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 24px;
+  padding: 10px 12px;
 }
 
 .progress-header {
   display: flex;
   justify-content: space-between;
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   color: #8b8ba0;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
 }
 
 .progress-track {
-  height: 6px;
+  height: 5px;
   background: #0d0d14;
   border-radius: 3px;
   overflow: hidden;
@@ -323,19 +281,78 @@ h1 {
   transition: width 0.3s ease;
 }
 
+/* ── Sidebar CTA ────────────────────────────────────────────────────────────── */
+.sidebar-cta {
+  text-align: center;
+  padding: 20px 12px;
+  background: #111118;
+  border: 1px solid #1a1a25;
+  border-radius: 10px;
+}
 
+.sidebar-cta p {
+  color: #64748b;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
 
-/* Leaderboard */
+/* ── Benchmark Footer ───────────────────────────────────────────────────────── */
+.benchmark-footer {
+  text-align: center;
+  padding: 8px 0;
+  font-size: 0.68rem;
+  color: #475569;
+}
+
+/* ── Leaderboard ────────────────────────────────────────────────────────────── */
 .leaderboard-container {
-  margin-bottom: 24px;
+  /* inherits sidebar styling */
 }
 
 .leaderboard-container h3 {
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   color: #555;
   text-transform: uppercase;
   letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.leaderboard-toggle {
+  display: flex;
+  gap: 0;
+  background: #0d0d14;
+  border: 1px solid #1a1a25;
+  border-radius: 8px;
+  overflow: hidden;
   margin-bottom: 8px;
+}
+
+.leaderboard-toggle-btn {
+  flex: 1;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: #64748b;
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.leaderboard-toggle-btn:first-child {
+  border-right: 1px solid #1a1a25;
+}
+
+.leaderboard-toggle-btn.active {
+  background: rgba(129, 140, 248, 0.1);
+  color: #818cf8;
+  font-weight: 600;
+}
+
+.leaderboard-toggle-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.03);
+  color: #94a3b8;
 }
 
 .leaderboard-list {
@@ -346,28 +363,29 @@ h1 {
 }
 
 .leaderboard-loading, .leaderboard-empty {
-  padding: 24px;
+  padding: 16px;
   text-align: center;
   color: #666;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
 }
 
 .leaderboard-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
 }
 
 .leaderboard-table th {
   text-align: left;
-  padding: 12px 16px;
+  padding: 10px 12px;
   color: #8b8ba0;
   border-bottom: 1px solid #1a1a25;
   font-weight: normal;
+  font-size: 0.7rem;
 }
 
 .leaderboard-table td {
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-bottom: 1px solid #1a1a25;
 }
 
@@ -380,7 +398,7 @@ h1 {
 }
 
 .leaderboard-table .rank-cell {
-  width: 50px;
+  width: 40px;
   color: #555;
 }
 
@@ -395,7 +413,7 @@ h1 {
 }
 
 .top-1 .rank-cell, .top-2 .rank-cell, .top-3 .rank-cell {
-  font-size: 1.1rem;
+  font-size: 1rem;
 }
 
 .top-1 .name-cell {
@@ -411,4 +429,68 @@ h1 {
 .top-3 .name-cell {
   color: #b45309;
   font-weight: bold;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Responsive — stack vertically below 768px
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  body {
+    overflow: auto;
+  }
+
+  .app-shell {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .sidebar {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    border-right: none;
+    border-bottom: 1px solid #1a1a28;
+    overflow-y: visible;
+  }
+
+  .main-panel {
+    min-height: 60vh;
+    overflow-y: visible;
+  }
+
+  .sidebar-inner {
+    padding: 16px 12px;
+  }
+}
+
+/* ── Scrollbar styling ──────────────────────────────────────────────────────── */
+.sidebar::-webkit-scrollbar,
+.main-panel::-webkit-scrollbar,
+.log::-webkit-scrollbar,
+.forge-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar::-webkit-scrollbar-track,
+.main-panel::-webkit-scrollbar-track,
+.log::-webkit-scrollbar-track,
+.forge-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar::-webkit-scrollbar-thumb,
+.main-panel::-webkit-scrollbar-thumb,
+.log::-webkit-scrollbar-thumb,
+.forge-content::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover,
+.main-panel::-webkit-scrollbar-thumb:hover,
+.log::-webkit-scrollbar-thumb:hover,
+.forge-content::-webkit-scrollbar-thumb:hover {
+  background: #334155;
 }

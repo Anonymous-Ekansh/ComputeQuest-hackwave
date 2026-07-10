@@ -29,7 +29,7 @@ app.get('/', (req, res) => {
 });
 
 // set up websocket handling
-const { setupSocketHandler, getLeaderboard } = require('./socketHandler');
+const { setupSocketHandler, getLeaderboard, getForgemasterLeaderboard } = require('./socketHandler');
 setupSocketHandler(io);
 
 app.get('/api/leaderboard', async (req, res) => {
@@ -42,7 +42,18 @@ app.get('/api/leaderboard', async (req, res) => {
   }
 });
 
+app.get('/api/leaderboard/forgemasters', async (req, res) => {
+  try {
+    const leaderboard = await getForgemasterLeaderboard();
+    res.json(leaderboard);
+  } catch (err) {
+    console.error('Forgemaster leaderboard fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch forgemaster leaderboard' });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`ComputeQuest server running on port ${PORT}`);
 });
+

@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import WorkerManager from './WorkerManager';
 import Leaderboard from './Leaderboard';
+import TheForge from './forge/TheForge';
 import { runDeviceBenchmark } from './benchmark';
 import './App.css';
 
@@ -19,6 +20,9 @@ function App() {
     username: 'Anonymous Node',
     credits: 0,
     isAuthenticated: false,
+    trophies: 0,
+    ownedCards: [],
+    savedDeck: [],
   });
   const userInfoRef = useRef(userInfo);
   
@@ -77,6 +81,9 @@ function App() {
       username: 'Anonymous Node',
       credits: 0,
       isAuthenticated: false,
+      trophies: 0,
+      ownedCards: [],
+      savedDeck: [],
     });
     addLog('Signed out. Reconnecting anonymously...');
     
@@ -117,7 +124,7 @@ function App() {
 
       // listen for user/credit updates from server
       socket.on('user_info', (info) => {
-        setUserInfo(info);
+        setUserInfo(prev => ({ ...prev, ...info }));
       });
 
       // listen for task:progress events
@@ -180,152 +187,119 @@ function App() {
 
 
   return (
-    <div className="app">
-      <h1>ComputeQuest</h1>
-      <p className="tagline">Donate your browser's computing power</p>
+    <div className="app-shell">
+      {/* ── Left Sidebar (Compute Panel) ── */}
+      <aside className="sidebar">
+        <div className="sidebar-inner">
+          <h1 className="sidebar-title">ComputeQuest</h1>
+          <p className="tagline">Donate your browser's computing power</p>
 
-      {/* Auth Card */}
-      <div className="auth-card">
-        {userInfo.isAuthenticated ? (
-          <div className="auth-logged-in">
-            <div>
-              <span>Logged in as: </span>
-              <strong className="user-meta">{userInfo.username}</strong>
-              <span> · Credits: </span>
-              <strong className="user-meta">{userInfo.credits}</strong>
-            </div>
-            <button className="auth-btn secondary" onClick={handleLogout}>Logout</button>
-          </div>
-        ) : (
-          <div className="auth-fields">
-            <h3>Persist Credits (Google Account)</h3>
-            <div className="auth-row" style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
-              <GoogleLogin
-                onSuccess={handleGoogleSuccess}
-                onError={() => addLog('Google Login Failed')}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="status-bar">
-        <div className={`status-dot ${connected ? 'online' : 'offline'}`} />
-        <span>{connected ? 'Connected' : 'Disconnected'}</span>
-        <span className="separator">·</span>
-        <span>{nodeCount} node{nodeCount !== 1 ? 's' : ''} online</span>
-      </div>
-
-      {!userInfo.isAuthenticated ? (
-        <div className="unauthenticated-message" style={{ textAlign: 'center', margin: '40px 0', padding: '30px', backgroundColor: '#1e293b', borderRadius: '12px' }}>
-          <h2>Sign in with Google to start contributing compute!</h2>
-          <p style={{ color: '#94a3b8', marginTop: '10px' }}>Your browser is connected to the network, but will not receive or process compute chunks until you authenticate.</p>
-        </div>
-      ) : (
-        <>
-          {/* Task Progress Bar */}
-          {taskProgress && (
-            <div className="progress-container">
-              <div className="progress-header">
-                <span>Processing Task: {taskProgress.taskId.slice(-10)}</span>
-                <span>{taskProgress.percentComplete}% ({taskProgress.chunksComplete}/{taskProgress.chunksTotal} chunks)</span>
+          {/* Auth Card */}
+          <div className="auth-card">
+            {userInfo.isAuthenticated ? (
+              <div className="auth-logged-in">
+                <div className="auth-user-info">
+                  <strong className="user-meta">{userInfo.username}</strong>
+                  <span className="credit-display">
+                    <span className="credit-icon">💎</span>
+                    <span className="credit-value">{userInfo.credits}</span>
+                  </span>
+                </div>
+                <button className="auth-btn secondary" onClick={handleLogout}>Logout</button>
               </div>
-              <div className="progress-track">
-                <div
-                  className="progress-fill"
-                  style={{ width: `${taskProgress.percentComplete}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="stats">
-            <div className="stat-card">
-              <div className="stat-value">{tasksCompleted}</div>
-              <div className="stat-label">Tasks Completed</div>
-            </div>
-            {lastResult && (
-              <div className="stat-card">
-                <div className="stat-value">{lastResult.computeTimeMs}ms</div>
-                <div className="stat-label">Last Compute Time</div>
+            ) : (
+              <div className="auth-fields">
+                <h3>Sign In to Compute</h3>
+                <div className="auth-row" style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
+                  <GoogleLogin
+                    onSuccess={handleGoogleSuccess}
+                    onError={() => addLog('Google Login Failed')}
+                  />
+                </div>
               </div>
             )}
           </div>
 
-          {lastResult && (
-            <div className="visualizer-container">
-              <h3>Live Matrix Compute Visualizer</h3>
-              <div className="matrices-wrapper">
-                <div className="matrix-box">
-                  <span className="matrix-name">A</span>
-                  <div className="matrix-grid">
-                    {lastResult.matrixA.map((row, r) => (
-                      <div key={r} className="matrix-row">
-                        {row.map((val, c) => (
-                          <span key={c} className="matrix-cell">{val}</span>
-                        ))}
-                      </div>
-                    ))}
+          <div className="status-bar">
+            <div className={`status-dot ${connected ? 'online' : 'offline'}`} />
+            <span>{connected ? 'Connected' : 'Disconnected'}</span>
+            <span className="separator">·</span>
+            <span>{nodeCount} node{nodeCount !== 1 ? 's' : ''} online</span>
+          </div>
+
+          {userInfo.isAuthenticated && (
+            <>
+              {/* Task Progress Bar */}
+              {taskProgress && (
+                <div className="progress-container">
+                  <div className="progress-header">
+                    <span>Task: {taskProgress.taskId.slice(-10)}</span>
+                    <span>{taskProgress.percentComplete}%</span>
+                  </div>
+                  <div className="progress-track">
+                    <div
+                      className="progress-fill"
+                      style={{ width: `${taskProgress.percentComplete}%` }}
+                    />
                   </div>
                 </div>
+              )}
 
-                <div className="matrix-op">×</div>
-
-                <div className="matrix-box">
-                  <span className="matrix-name">B</span>
-                  <div className="matrix-grid">
-                    {lastResult.matrixB.map((row, r) => (
-                      <div key={r} className="matrix-row">
-                        {row.map((val, c) => (
-                          <span key={c} className="matrix-cell">{val}</span>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
+              <div className="stats">
+                <div className="stat-card">
+                  <div className="stat-value">{tasksCompleted}</div>
+                  <div className="stat-label">Chunks Done</div>
                 </div>
-
-                <div className="matrix-op">=</div>
-
-                <div className="matrix-box result">
-                  <span className="matrix-name">Result</span>
-                  <div className="matrix-grid">
-                    {lastResult.result.map((row, r) => (
-                      <div key={r} className="matrix-row">
-                        {row.map((val, c) => (
-                          <span key={c} className="matrix-cell">{val}</span>
-                        ))}
-                      </div>
-                    ))}
+                {lastResult && (
+                  <div className="stat-card">
+                    <div className="stat-value">{lastResult.computeTimeMs}ms</div>
+                    <div className="stat-label">Last Time</div>
                   </div>
+                )}
+              </div>
+
+              <div className="log-container">
+                <h3>Activity Log</h3>
+                <div className="log">
+                  {log.length === 0 && <div className="log-entry dim">Waiting for connection...</div>}
+                  {log.map((entry, i) => (
+                    <div key={i} className="log-entry">{entry}</div>
+                  ))}
                 </div>
               </div>
+            </>
+          )}
+
+          {!userInfo.isAuthenticated && (
+            <div className="sidebar-cta">
+              <p>Sign in with Google to start contributing compute and earn crystals for The Forge!</p>
             </div>
           )}
 
-          <div className="log-container">
-            <h3>Activity Log</h3>
-            <div className="log">
-              {log.length === 0 && <div className="log-entry dim">Waiting for connection...</div>}
-              {log.map((entry, i) => (
-                <div key={i} className="log-entry">{entry}</div>
-              ))}
+          {/* Leaderboard */}
+          <Leaderboard />
+
+          {/* Device Benchmark Footer */}
+          {userInfo.isAuthenticated && (isBenchmarking || deviceBenchmark) && (
+            <div className="benchmark-footer">
+              {isBenchmarking ? (
+                <span>Benchmarking device…</span>
+              ) : deviceBenchmark ? (
+                <span>{deviceBenchmark.cores} cores · {deviceBenchmark.latency.toFixed(0)}ms · {(deviceBenchmark.computeScore / 1000000).toFixed(1)}M ops/s</span>
+              ) : null}
             </div>
-          </div>
-        </>
-      )}
-
-      <Leaderboard />
-
-      {/* Device Benchmark Footer */}
-      {userInfo.isAuthenticated && (isBenchmarking || deviceBenchmark) && (
-        <div className="benchmark-footer" style={{ textAlign: 'center', marginTop: '20px', paddingBottom: '20px', fontSize: '0.85rem', color: '#64748b' }}>
-          {isBenchmarking ? (
-            <span>Benchmarking device…</span>
-          ) : deviceBenchmark ? (
-            <span>Device profile: {deviceBenchmark.cores} cores · {deviceBenchmark.latency.toFixed(0)}ms latency · {(deviceBenchmark.computeScore / 1000000).toFixed(1)}M ops/sec</span>
-          ) : null}
+          )}
         </div>
-      )}
+      </aside>
+
+      {/* ── Right Panel (The Forge) ── */}
+      <main className="main-panel">
+        <TheForge
+          socket={socketRef.current}
+          userInfo={userInfo}
+          isAuthenticated={userInfo.isAuthenticated}
+        />
+      </main>
     </div>
   );
 }

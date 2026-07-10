@@ -1,4 +1,7 @@
-const { MATRIX_SIZE, TASK_TYPES } = require('../../shared/constants');
+const { MATRIX_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS, DECK_SIZE } = require('../../shared/constants');
+const { CARD_MAP } = require('../../shared/cards');
+const { getBotTier } = require('../../shared/bots');
+const { simulateBattle } = require('../../shared/battleLogic');
 const fs = require('fs');
 const path = require('path');
 
@@ -30,7 +33,7 @@ if (supabaseUrl && supabaseKey) {
 async function loadUsers() {
   if (supabase) {
     try {
-      const { data, error } = await supabase.from('users').select('id, username, credits, total_contributed');
+      const { data, error } = await supabase.from('users').select('id, username, credits, total_contributed, trophies');
       if (error) throw error;
       return data || [];
     } catch (err) {
@@ -48,6 +51,36 @@ async function loadUsers() {
     console.error('Failed to load users in socketHandler:', err);
   }
   return [];
+}
+
+// ── Forge game data helpers ──────────────────────────────────────────────────
+
+async function loadUserGameData(userId) {
+  if (!supabase) return { ownedCards: [], savedDeck: [] };
+  try {
+    const [cardsRes, deckRes] = await Promise.all([
+      supabase.from('user_cards').select('card_id').eq('user_id', userId),
+      supabase.from('user_decks').select('card_ids').eq('user_id', userId).single(),
+    ]);
+    const ownedCards = cardsRes.data ? cardsRes.data.map(r => r.card_id) : [];
+    const savedDeck = (deckRes.data && deckRes.data.card_ids) ? deckRes.data.card_ids : [];
+    return { ownedCards, savedDeck };
+  } catch (err) {
+    console.error('[game] Failed to load game data for', userId, err.message || err);
+    return { ownedCards: [], savedDeck: [] };
+  }
+}
+
+async function loadUserTrophies(userId) {
+  if (!supabase) return 0;
+  try {
+    const { data, error } = await supabase.from('users').select('trophies').eq('id', userId).single();
+    if (error) throw error;
+    return (data && data.trophies) || 0;
+  } catch (err) {
+    console.error('[game] Failed to load trophies for', userId, err.message || err);
+    return 0;
+  }
 }
 
 async function saveUsers(usersData) {
@@ -754,12 +787,25 @@ function setupSocketHandler(io) {
     // tell everyone the updated count
     io.emit('node_count', nodes.size);
 
-    // Send user info back to connection
-    socket.emit('user_info', {
-      username: user ? user.username : 'Anonymous Node',
-      credits: user ? user.credits : 0,
-      isAuthenticated: !!user,
-    });
+    // Send user info back to connection (including game data for authenticated users)
+    if (user) {
+      const gameData = await loadUserGameData(user.id);
+      const trophies = await loadUserTrophies(user.id);
+      socket.emit('user_info', {
+        username: user.username,
+        credits: user.credits,
+        isAuthenticated: true,
+        trophies,
+        ownedCards: gameData.ownedCards,
+        savedDeck: gameData.savedDeck,
+      });
+    } else {
+      socket.emit('user_info', {
+        username: 'Anonymous Node',
+        credits: 0,
+        isAuthenticated: false,
+      });
+    }
 
     // a new idle node just appeared — maybe we can dispatch work now
     drainRequeued(io);
@@ -856,6 +902,242 @@ function setupSocketHandler(io) {
       }
     });
 
+    // ── The Forge — game event handlers ────────────────────────────────────────
+
+    // Shop: unlock a card
+    socket.on('shop:unlock_card', async ({ cardId }) => {
+      try {
+        const node = nodes.get(socket.id);
+        if (!node || !node.userId) {
+          socket.emit('shop:unlock_result', { success: false, reason: 'not_authenticated' });
+          return;
+        }
+
+        // validate card exists
+        const card = CARD_MAP[cardId];
+        if (!card) {
+          socket.emit('shop:unlock_result', { success: false, reason: 'invalid_card' });
+          return;
+        }
+
+        // check not already owned
+        if (supabase) {
+          const { data: existing } = await supabase
+            .from('user_cards')
+            .select('card_id')
+            .eq('user_id', node.userId)
+            .eq('card_id', cardId)
+            .single();
+          if (existing) {
+            socket.emit('shop:unlock_result', { success: false, reason: 'already_owned' });
+            return;
+          }
+        }
+
+        // check balance (server-side, never trust client)
+        const usersList = await loadUsers();
+        const dbUser = usersList.find(u => u.id === node.userId);
+        if (!dbUser || dbUser.credits < card.cost) {
+          socket.emit('shop:unlock_result', { success: false, reason: 'insufficient_crystals' });
+          return;
+        }
+
+        // atomic transaction: deduct credits + insert card
+        const updatedTotals = await incrementUserCredits(node.userId, -card.cost);
+        if (updatedTotals) {
+          node.credits = updatedTotals.credits;
+        }
+
+        if (supabase) {
+          const { error: insertError } = await supabase
+            .from('user_cards')
+            .insert({ user_id: node.userId, card_id: cardId });
+          if (insertError) {
+            // rollback credits
+            await incrementUserCredits(node.userId, card.cost);
+            if (updatedTotals) node.credits = updatedTotals.credits + card.cost;
+            console.error('[shop] Failed to insert card:', insertError.message);
+            socket.emit('shop:unlock_result', { success: false, reason: 'server_error' });
+            return;
+          }
+        }
+
+        console.log(`[shop] ${node.username} unlocked ${card.name} for ${card.cost} crystals`);
+
+        // send result + updated user_info
+        const gameData = await loadUserGameData(node.userId);
+        const trophies = await loadUserTrophies(node.userId);
+        socket.emit('shop:unlock_result', { success: true, cardId, newBalance: node.credits });
+        socket.emit('user_info', {
+          username: node.username,
+          credits: node.credits,
+          isAuthenticated: true,
+          trophies,
+          ownedCards: gameData.ownedCards,
+          savedDeck: gameData.savedDeck,
+        });
+      } catch (err) {
+        console.error('[shop] Uncaught error:', err);
+        socket.emit('shop:unlock_result', { success: false, reason: 'server_error' });
+      }
+    });
+
+    // Deck: save a deck of 4 cards
+    socket.on('deck:save', async ({ cardIds }) => {
+      try {
+        const node = nodes.get(socket.id);
+        if (!node || !node.userId) {
+          socket.emit('deck:save_result', { success: false, reason: 'not_authenticated' });
+          return;
+        }
+
+        // validate exactly 4 card IDs
+        if (!Array.isArray(cardIds) || cardIds.length !== DECK_SIZE) {
+          socket.emit('deck:save_result', { success: false, reason: 'invalid_deck_size' });
+          return;
+        }
+
+        // validate all cards exist in catalog
+        for (const cid of cardIds) {
+          if (!CARD_MAP[cid]) {
+            socket.emit('deck:save_result', { success: false, reason: `invalid_card: ${cid}` });
+            return;
+          }
+        }
+
+        // validate all cards are owned
+        if (supabase) {
+          const { data: owned } = await supabase
+            .from('user_cards')
+            .select('card_id')
+            .eq('user_id', node.userId);
+          const ownedSet = new Set((owned || []).map(r => r.card_id));
+          for (const cid of cardIds) {
+            if (!ownedSet.has(cid)) {
+              socket.emit('deck:save_result', { success: false, reason: `card_not_owned: ${cid}` });
+              return;
+            }
+          }
+
+          // upsert deck
+          const { error } = await supabase
+            .from('user_decks')
+            .upsert({ user_id: node.userId, card_ids: cardIds, updated_at: new Date().toISOString() },
+                    { onConflict: 'user_id' });
+          if (error) {
+            console.error('[deck] Failed to save deck:', error.message);
+            socket.emit('deck:save_result', { success: false, reason: 'server_error' });
+            return;
+          }
+        }
+
+        console.log(`[deck] ${node.username} saved deck: [${cardIds.join(', ')}]`);
+        socket.emit('deck:save_result', { success: true });
+
+        // send updated user_info
+        const gameData = await loadUserGameData(node.userId);
+        const trophies = await loadUserTrophies(node.userId);
+        socket.emit('user_info', {
+          username: node.username,
+          credits: node.credits,
+          isAuthenticated: true,
+          trophies,
+          ownedCards: gameData.ownedCards,
+          savedDeck: gameData.savedDeck,
+        });
+      } catch (err) {
+        console.error('[deck] Uncaught error:', err);
+        socket.emit('deck:save_result', { success: false, reason: 'server_error' });
+      }
+    });
+
+    // Battle: report result — server re-simulates to validate
+    socket.on('battle:report_result', async ({ won, trophies: clientTrophies }) => {
+      try {
+        const node = nodes.get(socket.id);
+        if (!node || !node.userId) {
+          socket.emit('battle:result_confirmed', { success: false, reason: 'not_authenticated' });
+          return;
+        }
+
+        // load player's saved deck
+        const gameData = await loadUserGameData(node.userId);
+        if (!gameData.savedDeck || gameData.savedDeck.length !== DECK_SIZE) {
+          socket.emit('battle:result_confirmed', { success: false, reason: 'no_valid_deck' });
+          return;
+        }
+
+        // resolve player deck to full card objects
+        const playerDeck = gameData.savedDeck.map(id => CARD_MAP[id]).filter(Boolean);
+        if (playerDeck.length !== DECK_SIZE) {
+          socket.emit('battle:result_confirmed', { success: false, reason: 'invalid_deck_cards' });
+          return;
+        }
+
+        // get current trophies to determine bot tier
+        const currentTrophies = await loadUserTrophies(node.userId);
+        const botTier = getBotTier(currentTrophies);
+        const botDeck = botTier.cardIds.map(id => CARD_MAP[id]);
+
+        // re-simulate battle server-side
+        const result = simulateBattle(playerDeck, botDeck);
+        const serverSaysWon = result.winner === 'player';
+
+        // validate client claim matches server simulation
+        if (won !== serverSaysWon) {
+          console.warn(`[battle] MISMATCH: ${node.username} claimed ${won ? 'win' : 'loss'} but server says ${serverSaysWon ? 'win' : 'loss'}`);
+          socket.emit('battle:result_confirmed', { success: false, reason: 'result_mismatch' });
+          return;
+        }
+
+        // update trophies
+        const delta = serverSaysWon ? TROPHY_WIN : TROPHY_LOSS;
+        const newTrophies = Math.max(0, currentTrophies + delta);
+
+        if (supabase) {
+          const { error } = await supabase
+            .from('users')
+            .update({ trophies: newTrophies })
+            .eq('id', node.userId);
+          if (error) {
+            console.error('[battle] Failed to update trophies:', error.message);
+            socket.emit('battle:result_confirmed', { success: false, reason: 'server_error' });
+            return;
+          }
+        }
+
+        console.log(`[battle] ${node.username} ${serverSaysWon ? 'WON' : 'LOST'}: ${currentTrophies} → ${newTrophies} (${delta > 0 ? '+' : ''}${delta})`);
+
+        // check for tier escalation toast
+        let tierEscalation = null;
+        const oldTier = getBotTier(currentTrophies);
+        const newTier = getBotTier(newTrophies);
+        if (oldTier.name !== newTier.name) {
+          tierEscalation = { oldTier: oldTier.name, newTier: newTier.name };
+        }
+
+        socket.emit('battle:result_confirmed', {
+          success: true,
+          trophies: newTrophies,
+          delta,
+          tierEscalation,
+        });
+
+        // send updated user_info
+        socket.emit('user_info', {
+          username: node.username,
+          credits: node.credits,
+          isAuthenticated: true,
+          trophies: newTrophies,
+          ownedCards: gameData.ownedCards,
+          savedDeck: gameData.savedDeck,
+        });
+      } catch (err) {
+        console.error('[battle] Uncaught error:', err);
+        socket.emit('battle:result_confirmed', { success: false, reason: 'server_error' });
+      }
+    });
+
     socket.on('disconnect', () => {
       // remove from pool FIRST so it can't be picked as a reassignment target
       nodes.delete(socket.id);
@@ -911,4 +1193,20 @@ async function getLeaderboard() {
   }));
 }
 
-module.exports = { setupSocketHandler, getLeaderboard };
+async function getForgemasterLeaderboard() {
+  const usersList = await loadUsers();
+  // Filter out users with 0 trophies
+  const activePlayers = usersList.filter(u => (u.trophies || 0) > 0);
+  
+  // Sort descending by trophies
+  activePlayers.sort((a, b) => (b.trophies || 0) - (a.trophies || 0));
+  
+  // Return top 10
+  return activePlayers.slice(0, 10).map((u, index) => ({
+    rank: index + 1,
+    username: u.username,
+    trophies: u.trophies || 0,
+  }));
+}
+
+module.exports = { setupSocketHandler, getLeaderboard, getForgemasterLeaderboard };

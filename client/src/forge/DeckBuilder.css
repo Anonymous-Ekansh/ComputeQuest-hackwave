@@ -1,0 +1,287 @@
+/* DeckBuilder styles */
+
+.deck-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.deck-header h3 {
+  font-size: 1.1rem;
+  color: #f1f5f9;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.deck-subtitle {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+/* Empty state */
+.deck-empty-state {
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.empty-icon {
+  font-size: 3rem;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.deck-empty-state h3 {
+  font-size: 1rem;
+  color: #94a3b8;
+  margin-bottom: 8px;
+}
+
+.deck-empty-state p {
+  font-size: 0.85rem;
+  color: #64748b;
+  margin-bottom: 20px;
+}
+
+.empty-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.empty-progress-track {
+  width: 200px;
+  height: 6px;
+  background: #1e293b;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.empty-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #818cf8, #6366f1);
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.empty-progress span {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+/* Deck slots */
+.deck-slots {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.deck-slots-label {
+  font-size: 0.75rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+
+.deck-slots-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  justify-items: center;
+}
+
+.deck-slot {
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.deck-slot.filled:hover {
+  transform: scale(0.95);
+}
+
+.deck-slot.filled:hover .slot-remove {
+  opacity: 1;
+}
+
+.deck-slot-placeholder {
+  width: 140px;
+  min-height: 190px;
+  border: 2px dashed #334155;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.slot-number {
+  font-size: 1.5rem;
+  color: #334155;
+  font-weight: 700;
+}
+
+.slot-hint {
+  font-size: 0.7rem;
+  color: #475569;
+}
+
+.slot-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  background: #ef4444;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: bold;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 5;
+}
+
+/* Actions */
+.deck-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.deck-save-btn,
+.deck-battle-btn {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.deck-save-btn {
+  background: #818cf8;
+  color: #0f172a;
+}
+
+.deck-save-btn:hover:not(:disabled) {
+  background: #a5b4fc;
+  transform: translateY(-1px);
+}
+
+.deck-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.deck-battle-btn {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #fff;
+}
+
+.deck-battle-btn:hover {
+  background: linear-gradient(135deg, #4ade80, #22c55e);
+  transform: translateY(-1px);
+}
+
+/* Save message */
+.deck-message {
+  text-align: center;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  animation: slideDown 0.3s ease;
+}
+
+.deck-message.success {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #86efac;
+}
+
+.deck-message.error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+/* Available cards grid */
+.deck-available {
+  border-top: 1px solid #1e293b;
+  padding-top: 20px;
+}
+
+.deck-available-label {
+  font-size: 0.75rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+
+.deck-available-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  justify-items: center;
+}
+
+.deck-card-wrapper {
+  position: relative;
+}
+
+.deck-card-wrapper:not(.in-deck) .game-card {
+  cursor: pointer;
+}
+
+.deck-card-wrapper:not(.in-deck) .game-card:hover {
+  transform: translateY(-4px);
+  filter: brightness(1.15);
+}
+
+.deck-card-wrapper.in-deck .game-card {
+  opacity: 0.35;
+  filter: grayscale(0.5);
+}
+
+.game-card.dimmed {
+  opacity: 0.35;
+}
+
+.in-deck-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.6rem;
+  color: #818cf8;
+  background: rgba(15, 23, 42, 0.9);
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(129, 140, 248, 0.3);
+  white-space: nowrap;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .deck-slots-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .deck-slot-placeholder {
+    width: 120px;
+    min-height: 165px;
+  }
+
+  .deck-available-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  }
+}
