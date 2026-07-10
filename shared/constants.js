@@ -1,13 +1,5 @@
-// shared constants used by both server and client
-
-const MATRIX_SIZE = 8; // 8x8 matrices for demo chunks
-
-const TASK_TYPES = {
-  MATRIX_MULTIPLY: 'MATRIX_MULTIPLY',
-  // future: INFERENCE_BATCH, MONTE_CARLO
-};
-
-// ── The Forge — game constants ───────────────────────────────────────────────
+const MATRIX_SIZE = 8;
+const TASK_TYPES = { MATRIX_MULTIPLY: 'MATRIX_MULTIPLY' };
 
 const CARD_TYPES = {
   OVERCLOCK: 'OVERCLOCK',
@@ -15,17 +7,16 @@ const CARD_TYPES = {
   FIRMWARE:  'FIRMWARE',
 };
 
-const TROPHY_WIN  =  3;   // trophies gained on win
-const TROPHY_LOSS = -1;   // trophies lost on loss (floor 0)
-const DECK_SIZE   =  4;   // cards per deck
-const CREDITS_PER_CRYSTAL = 100; // Conversion rate from compute credits to game crystals
+const TROPHY_WIN  =  3;
+const TROPHY_LOSS = -1;
+const DECK_SIZE   =  4;
+const CREDITS_PER_CRYSTAL = 100;
+
+// Upgrades
+const CREDITS_PER_UPGRADE = 1000; 
+const MAX_UPGRADES_PER_CARD = 10; 
 
 module.exports = {
-  MATRIX_SIZE,
-  TASK_TYPES,
-  CARD_TYPES,
-  TROPHY_WIN,
-  TROPHY_LOSS,
-  DECK_SIZE,
-  CREDITS_PER_CRYSTAL,
+  MATRIX_SIZE, TASK_TYPES, CARD_TYPES, TROPHY_WIN, TROPHY_LOSS, 
+  DECK_SIZE, CREDITS_PER_CRYSTAL, CREDITS_PER_UPGRADE, MAX_UPGRADES_PER_CARD,
 };
