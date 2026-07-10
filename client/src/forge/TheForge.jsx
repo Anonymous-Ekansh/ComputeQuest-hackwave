@@ -14,7 +14,6 @@ const TABS = [
 export default function TheForge({ socket, userInfo, isAuthenticated }) {
   const [activeTab, setActiveTab] = useState('shop');
   
-  // Local state to manage instantaneous UI updates
   const [localSpentCredits, setLocalSpentCredits] = useState(0);
   const [localUpgrades, setLocalUpgrades] = useState(userInfo?.upgrades || {});
 
@@ -133,6 +132,7 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
             savedDeck={savedDeck}
             trophies={trophies}
             ownedCards={ownedCards}
+            localUpgrades={localUpgrades} 
             onEditDeck={() => setActiveTab('deck')}
             onVisitShop={() => setActiveTab('shop')}
           />

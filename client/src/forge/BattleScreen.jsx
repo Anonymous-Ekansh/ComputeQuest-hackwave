@@ -7,19 +7,17 @@ import './BattleScreen.css';
 const ARENA_W = 700;
 const ARENA_H = 400;
 const CHAR_SIZE = 48;
-const MOVE_SPEED = 2;          // px per tick (player & bot)
-const ATTACK_RANGE = 80;         // px — close enough to hit
-const ATTACK_COOLDOWN = 1200;     // ms between attacks
+const MOVE_SPEED = 2;          
+const ATTACK_RANGE = 80;         
+const ATTACK_COOLDOWN = 1200;     
 const MANUAL_ATTACK_MULTIPLIER = 1.4;
-const MANUAL_ATTACK_COOLDOWN = 500; // ms
-const TICK_MS = 16;              // ~60 fps
-const HINT_DURATION = 4000;      // control hint stays visible (ms)
-const HP_SCALE = 8;              // base HP multiplier (attack + defense) * scale
+const MANUAL_ATTACK_COOLDOWN = 500; 
+const TICK_MS = 16;              
+const HINT_DURATION = 4000;      
+const HP_SCALE = 8;              
 
-// Battle flow states
 const STATES = { IDLE: 'idle', READY: 'ready', BATTLING: 'battling', RESULT: 'result' };
 
-// ── helpers ──────────────────────────────────────────────────────────────────
 function dist(a, b) {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 }
@@ -29,7 +27,6 @@ function dmg(attacker, defender) {
   if (hasAdvantage(attacker.card.type, defender.card.type)) {
     power = Math.floor(power * 1.5);
   }
-  // defense reduces damage slightly
   const reduced = Math.max(1, power - Math.floor(defender.card.defense * 0.3));
   return reduced;
 }
@@ -48,19 +45,18 @@ function buildFighter(card, team, idx, total) {
     maxHp,
     alive: true,
     lastAttackAt: 0,
-    hitTimer: 0,    // >0 = showing hit flash
-    lungeDir: 0,    // lunge offset during attack anim
+    hitTimer: 0,    
+    lungeDir: 0,    
     floatingDmg: [],
   };
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
 
 export default function BattleScreen({
   socket,
   savedDeck,
   trophies,
   ownedCards,
+  localUpgrades = {}, // Now receives upgrades
   onEditDeck,
   onVisitShop,
 }) {
@@ -71,7 +67,7 @@ export default function BattleScreen({
   const [fighters, setFighters] = useState([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [showHint, setShowHint] = useState(false);
-  const [winner, setWinner] = useState(null);           // 'player' | 'bot' | null
+  const [winner, setWinner] = useState(null);           
   const [serverConfirmed, setServerConfirmed] = useState(false);
   const [confirmedData, setConfirmedData] = useState(null);
   const [toast, setToast] = useState(null);
@@ -85,12 +81,10 @@ export default function BattleScreen({
 
   const hasDeck = savedDeck && savedDeck.length === 4;
 
-  // Keep refs in sync
   useEffect(() => { fightersRef.current = fighters; }, [fighters]);
   useEffect(() => { selectedIdxRef.current = selectedIdx; }, [selectedIdx]);
   useEffect(() => { winnerRef.current = winner; }, [winner]);
 
-  // ── keyboard ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (battleState !== STATES.BATTLING) return;
 
@@ -99,7 +93,6 @@ export default function BattleScreen({
       keysRef.current.add(k);
       if (k === ' ' && !e.repeat) keysRef.current.spacebarJustPressed = true;
 
-      // number keys → switch selected character
       if (k >= '1' && k <= '4') {
         const idx = parseInt(k) - 1;
         const playerFighters = fightersRef.current.filter(f => f.team === 'player' && f.alive);
@@ -120,17 +113,28 @@ export default function BattleScreen({
     };
   }, [battleState]);
 
-  // ── click-to-select ────────────────────────────────────────────────────────
   const handleClickFighter = useCallback((idx) => {
     if (fightersRef.current[idx]?.team === 'player' && fightersRef.current[idx]?.alive) {
       setSelectedIdx(idx);
     }
   }, []);
 
-  // ── start battle setup ─────────────────────────────────────────────────────
   const startBattle = useCallback(() => {
     if (!hasDeck) return;
-    const pDeck = savedDeck.map(id => CARD_MAP[id]).filter(Boolean);
+    
+    // Build the player deck WITH the new upgrades applied
+    const pDeck = savedDeck.map(id => {
+      const baseCard = CARD_MAP[id];
+      if (!baseCard) return null;
+      
+      const upg = localUpgrades[id] || { attack: 0, defense: 0 };
+      return {
+        ...baseCard,
+        attack: baseCard.attack + upg.attack,
+        defense: baseCard.defense + upg.defense
+      };
+    }).filter(Boolean);
+    
     if (pDeck.length !== 4) return;
     const tier = getBotTier(trophies || 0);
     const bDeck = tier.cardIds.map(id => CARD_MAP[id]);
@@ -143,9 +147,8 @@ export default function BattleScreen({
     setConfirmedData(null);
     setToast(null);
     setBattleState(STATES.READY);
-  }, [hasDeck, savedDeck, trophies]);
+  }, [hasDeck, savedDeck, trophies, localUpgrades]);
 
-  // ── begin the real-time fight ──────────────────────────────────────────────
   const beginFight = useCallback(() => {
     const allFighters = [
       ...playerDeck.map((c, i) => buildFighter(c, 'player', i, playerDeck.length)),
@@ -158,11 +161,9 @@ export default function BattleScreen({
     setShowHint(true);
     setBattleState(STATES.BATTLING);
 
-    // fade out hint
     setTimeout(() => setShowHint(false), HINT_DURATION);
   }, [playerDeck, botDeck]);
 
-  // ── game loop ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (battleState !== STATES.BATTLING) return;
 
@@ -178,7 +179,6 @@ export default function BattleScreen({
       const spacePressed = keys.spacebarJustPressed;
       keys.spacebarJustPressed = false;
 
-      // ── move selected player character ──
       const sel = updated[selIdx];
       if (sel && sel.team === 'player' && sel.alive) {
         let dx = 0, dy = 0;
@@ -186,19 +186,16 @@ export default function BattleScreen({
         if (keys.has('s') || keys.has('arrowdown'))  dy = MOVE_SPEED;
         if (keys.has('a') || keys.has('arrowleft'))  dx = -MOVE_SPEED;
         if (keys.has('d') || keys.has('arrowright')) dx = MOVE_SPEED;
-        // normalize diagonal
         if (dx && dy) { dx *= 0.707; dy *= 0.707; }
         sel.x = Math.max(CHAR_SIZE / 2, Math.min(ARENA_W - CHAR_SIZE / 2, sel.x + dx));
         sel.y = Math.max(CHAR_SIZE / 2, Math.min(ARENA_H - CHAR_SIZE / 2, sel.y + dy));
       }
 
-      // ── bot AI: path toward nearest player ──
       for (const bot of updated) {
         if (bot.team !== 'bot' || !bot.alive) continue;
         const targets = updated.filter(f => f.team === 'player' && f.alive);
         if (targets.length === 0) continue;
 
-        // find nearest player
         let nearest = targets[0];
         let nearDist = dist(bot, nearest);
         for (const t of targets) {
@@ -206,7 +203,6 @@ export default function BattleScreen({
           if (d < nearDist) { nearest = t; nearDist = d; }
         }
 
-        // move toward nearest
         if (nearDist > ATTACK_RANGE * 0.8) {
           const angle = Math.atan2(nearest.y - bot.y, nearest.x - bot.x);
           bot.x += Math.cos(angle) * MOVE_SPEED;
@@ -215,7 +211,6 @@ export default function BattleScreen({
           bot.y = Math.max(CHAR_SIZE / 2, Math.min(ARENA_H - CHAR_SIZE / 2, bot.y));
         }
 
-        // bot attacks on cooldown when in range
         if (nearDist <= ATTACK_RANGE && now - bot.lastAttackAt >= ATTACK_COOLDOWN) {
           const damage = dmg(bot, nearest);
           nearest.hp = Math.max(0, nearest.hp - damage);
@@ -227,7 +222,6 @@ export default function BattleScreen({
         }
       }
 
-      // ── player auto-attacks: if selected character is in range, attack on cooldown ──
       for (let i = 0; i < updated.length; i++) {
         const pf = updated[i];
         if (pf.team !== 'player' || !pf.alive) continue;
@@ -235,7 +229,6 @@ export default function BattleScreen({
         const enemies = updated.filter(f => f.team === 'bot' && f.alive);
         if (enemies.length === 0) continue;
 
-        // find nearest enemy
         let nearest = enemies[0];
         let nearDist = dist(pf, nearest);
         for (const e of enemies) {
@@ -244,11 +237,9 @@ export default function BattleScreen({
         }
 
         const isSelected = (i === selIdx);
-        let manualDidFire = false;
 
         if (isSelected && spacePressed) {
           if (nearDist <= ATTACK_RANGE && now - (pf.lastManualAttackAt || 0) >= MANUAL_ATTACK_COOLDOWN) {
-            // MANUAL ATTACK
             const damage = Math.floor(dmg(pf, nearest) * MANUAL_ATTACK_MULTIPLIER);
             nearest.hp = Math.max(0, nearest.hp - damage);
             nearest.hitTimer = now;
@@ -256,28 +247,21 @@ export default function BattleScreen({
             pf.lungeDir = Math.atan2(nearest.y - pf.y, nearest.x - pf.x);
             nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isManual: true });
             if (nearest.hp <= 0) nearest.alive = false;
-            manualDidFire = true;
           } else {
-            // WHIFF
             pf.whiffTimer = now;
           }
         }
-
-        // Auto-attacks removed: player must manually attack with spacebar
       }
 
-      // ── clean up old floating damage numbers ──
       for (const f of updated) {
         f.floatingDmg = f.floatingDmg.filter(d => now - d.createdAt < 1200);
       }
 
-      // ── decay hit/lunge timers ──
       for (const f of updated) {
         if (f.hitTimer && now - f.hitTimer > 200) f.hitTimer = 0;
         if (f.lastAttackAt && now - f.lastAttackAt > 150) f.lungeDir = 0;
       }
 
-      // ── check win condition ──
       const playersAlive = updated.filter(f => f.team === 'player' && f.alive).length;
       const botsAlive = updated.filter(f => f.team === 'bot' && f.alive).length;
 
@@ -285,7 +269,6 @@ export default function BattleScreen({
         const w = botsAlive === 0 ? 'player' : 'bot';
         setWinner(w);
 
-        // report to server
         socket.emit('battle:report_result', {
           won: w === 'player',
           trophies: trophies || 0,
@@ -309,10 +292,8 @@ export default function BattleScreen({
     return () => clearInterval(loop);
   }, [battleState, socket, trophies]);
 
-  // Stop loop when winner is set
   useEffect(() => {
     if (winner && loopRef.current) {
-      // give a moment for the last state to render, then transition
       setTimeout(() => {
         clearInterval(loopRef.current);
         loopRef.current = null;
@@ -321,11 +302,6 @@ export default function BattleScreen({
     }
   }, [winner]);
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  // RENDER
-  // ══════════════════════════════════════════════════════════════════════════════
-
-  // ── IDLE ──
   if (battleState === STATES.IDLE) {
     return (
       <div className="battle-screen">
@@ -360,7 +336,6 @@ export default function BattleScreen({
     );
   }
 
-  // ── READY ──
   if (battleState === STATES.READY) {
     return (
       <div className="battle-screen">
@@ -396,7 +371,6 @@ export default function BattleScreen({
     );
   }
 
-  // ── BATTLING ──
   if (battleState === STATES.BATTLING) {
     const now = Date.now();
     const playerAlive = fighters.filter(f => f.team === 'player' && f.alive);
@@ -404,7 +378,6 @@ export default function BattleScreen({
 
     return (
       <div className="battle-screen battling" tabIndex={0} ref={arenaRef}>
-        {/* HUD */}
         <div className="arena-hud">
           <div className="hud-side player-hud">
             <span className="hud-label">YOU</span>
@@ -416,14 +389,11 @@ export default function BattleScreen({
           </div>
         </div>
 
-        {/* Arena */}
         <div className="arena" style={{ width: ARENA_W, height: ARENA_H }}>
-          {/* Arena ground layers */}
           <div className="arena-floor" />
           <div className="arena-midline" />
           <div className="arena-frame" />
 
-          {/* Fighters */}
           {fighters.map((f, idx) => {
             const isSelected = f.team === 'player' && idx === selectedIdx;
             const isHit = f.hitTimer && now - f.hitTimer < 200;
@@ -440,7 +410,6 @@ export default function BattleScreen({
             const typeColor = f.card.type === 'OVERCLOCK' ? '#f97316'
               : f.card.type === 'COOLANT' ? '#06b6d4' : '#a855f7';
 
-            // player number label (1-4)
             const playerNum = f.team === 'player'
               ? fighters.filter((ff, fi) => ff.team === 'player' && fi <= idx).length
               : null;
@@ -465,18 +434,10 @@ export default function BattleScreen({
                 }}
                 onClick={() => handleClickFighter(idx)}
               >
-                {/* Selection ring */}
                 {isSelected && f.alive && <div className="select-ring" />}
-
-                {/* Character glyph */}
                 <span className="fighter-glyph">{f.card.glyph || '?'}</span>
+                {playerNum && f.alive && <span className="fighter-num">{playerNum}</span>}
 
-                {/* Player number */}
-                {playerNum && f.alive && (
-                  <span className="fighter-num">{playerNum}</span>
-                )}
-
-                {/* HP bar */}
                 {f.alive && (
                   <div className="hp-bar-container">
                     <div
@@ -489,7 +450,6 @@ export default function BattleScreen({
                   </div>
                 )}
 
-                {/* Floating damage numbers */}
                 {f.floatingDmg.map(d => {
                   const age = now - d.createdAt;
                   const opacity = Math.max(0, 1 - age / 1200);
@@ -498,10 +458,7 @@ export default function BattleScreen({
                     <span
                       key={d.id}
                       className={`floating-dmg ${d.isManual ? 'manual' : ''}`}
-                      style={{
-                        opacity,
-                        transform: `translateY(${yOff}px)`,
-                      }}
+                      style={{ opacity, transform: `translateY(${yOff}px)` }}
                     >
                       -{d.value}{d.isManual ? '!' : ''}
                     </span>
@@ -511,7 +468,6 @@ export default function BattleScreen({
             );
           })}
 
-          {/* Victory/Defeat overlay */}
           {winner && (
             <div className={`arena-overlay ${winner === 'player' ? 'victory' : 'defeat'}`}>
               <span className="overlay-text">
@@ -521,7 +477,6 @@ export default function BattleScreen({
           )}
         </div>
 
-        {/* Control hint */}
         {showHint && (
           <div className="control-hint">
             <span>WASD to move</span>
@@ -534,7 +489,6 @@ export default function BattleScreen({
           </div>
         )}
 
-        {/* Character selection bar */}
         <div className="char-select-bar">
           {fighters.filter(f => f.team === 'player').map((f, pIdx) => {
             const realIdx = fighters.indexOf(f);
@@ -563,7 +517,6 @@ export default function BattleScreen({
     );
   }
 
-  // ── RESULT ──
   if (battleState === STATES.RESULT && winner) {
     const won = winner === 'player';
     const delta = confirmedData?.delta;
