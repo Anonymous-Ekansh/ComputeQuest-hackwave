@@ -18,6 +18,7 @@ const CARD_TYPES = {
 const TROPHY_WIN  =  3;   // trophies gained on win
 const TROPHY_LOSS = -1;   // trophies lost on loss (floor 0)
 const DECK_SIZE   =  4;   // cards per deck
+const CREDITS_PER_CRYSTAL = 100; // Conversion rate from compute credits to game crystals
 
 module.exports = {
   MATRIX_SIZE,
@@ -26,4 +27,5 @@ module.exports = {
   TROPHY_WIN,
   TROPHY_LOSS,
   DECK_SIZE,
+  CREDITS_PER_CRYSTAL,
 };

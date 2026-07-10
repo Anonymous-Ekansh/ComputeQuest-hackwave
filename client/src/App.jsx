@@ -200,9 +200,9 @@ function App() {
               <div className="auth-logged-in">
                 <div className="auth-user-info">
                   <strong className="user-meta">{userInfo.username}</strong>
-                  <span className="credit-display">
-                    <span className="credit-icon">💎</span>
-                    <span className="credit-value">{userInfo.credits}</span>
+                  <span className="credit-display" title="Credits earned from computing">
+                    <span className="credit-icon">⚡</span>
+                    <span className="credit-value">{userInfo.credits} credits</span>
                   </span>
                 </div>
                 <button className="auth-btn secondary" onClick={handleLogout}>Logout</button>
@@ -272,7 +272,7 @@ function App() {
 
           {!userInfo.isAuthenticated && (
             <div className="sidebar-cta">
-              <p>Sign in with Google to start contributing compute and earn crystals for The Forge!</p>
+              <p>Sign in with Google to start contributing compute and earn credits to convert into crystals for The Forge!</p>
             </div>
           )}
 

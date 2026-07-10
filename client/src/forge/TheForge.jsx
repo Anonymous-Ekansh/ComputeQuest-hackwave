@@ -2,6 +2,7 @@ import { useState } from 'react';
 import CardShop from './CardShop';
 import DeckBuilder from './DeckBuilder';
 import BattleScreen from './BattleScreen';
+import { CREDITS_PER_CRYSTAL } from './cardData';
 import './TheForge.css';
 
 const TABS = [
@@ -13,7 +14,9 @@ const TABS = [
 export default function TheForge({ socket, userInfo, isAuthenticated }) {
   const [activeTab, setActiveTab] = useState('shop');
 
-  const crystals = userInfo.credits || 0;
+  const credits = userInfo.credits || 0;
+  const crystals = Math.floor(credits / CREDITS_PER_CRYSTAL);
+  const creditsToNext = credits % CREDITS_PER_CRYSTAL;
   const trophies = userInfo.trophies || 0;
   const ownedCards = userInfo.ownedCards || [];
   const savedDeck = userInfo.savedDeck || [];
@@ -47,8 +50,12 @@ export default function TheForge({ socket, userInfo, isAuthenticated }) {
         <div className="forge-stats">
           <div className="forge-stat crystals">
             <span className="stat-icon">💎</span>
-            <span className="stat-value" key={crystals}>{crystals}</span>
-            <span className="stat-label">Crystals</span>
+            <div className="crystal-display" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.1 }}>
+              <span className="stat-value" key={crystals}>{crystals} crystals</span>
+              <span style={{ fontSize: '0.6rem', color: '#94a3b8', fontWeight: 'normal' }}>
+                {creditsToNext}/{CREDITS_PER_CRYSTAL} credits
+              </span>
+            </div>
           </div>
           <div className="forge-stat trophies">
             <span className="stat-icon">🏆</span>

@@ -1,4 +1,4 @@
-const { MATRIX_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS, DECK_SIZE } = require('../../shared/constants');
+const { MATRIX_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS, DECK_SIZE, CREDITS_PER_CRYSTAL } = require('../../shared/constants');
 const { CARD_MAP } = require('../../shared/cards');
 const { getBotTier } = require('../../shared/bots');
 const { simulateBattle } = require('../../shared/battleLogic');
@@ -935,9 +935,10 @@ function setupSocketHandler(io) {
         }
 
         // check balance (server-side, never trust client)
+        const creditCost = card.cost * CREDITS_PER_CRYSTAL;
         const usersList = await loadUsers();
         const dbUser = usersList.find(u => u.id === node.userId);
-        if (!dbUser || dbUser.credits < card.cost) {
+        if (!dbUser || dbUser.credits < creditCost) {
           socket.emit('shop:unlock_result', { success: false, reason: 'insufficient_crystals' });
           return;
         }
@@ -947,9 +948,9 @@ function setupSocketHandler(io) {
           // Atomic deduct: only succeeds if credits >= cost
           const { data: deducted, error: deductErr } = await supabase
             .from('users')
-            .update({ credits: dbUser.credits - card.cost })
+            .update({ credits: dbUser.credits - creditCost })
             .eq('id', node.userId)
-            .gte('credits', card.cost)
+            .gte('credits', creditCost)
             .select('credits')
             .single();
 
@@ -960,7 +961,7 @@ function setupSocketHandler(io) {
           node.credits = deducted.credits;
         } else {
           // Local JSON fallback
-          dbUser.credits = dbUser.credits - card.cost;
+          dbUser.credits = dbUser.credits - creditCost;
           const allUsers = await loadUsers();
           const localUser = allUsers.find(u => u.id === node.userId);
           if (localUser) {
@@ -977,8 +978,8 @@ function setupSocketHandler(io) {
             .insert({ user_id: node.userId, card_id: cardId });
           if (insertError) {
             // rollback: re-add the cost (positive amount)
-            await incrementUserCredits(node.userId, card.cost);
-            node.credits = node.credits + card.cost;
+            await incrementUserCredits(node.userId, creditCost);
+            node.credits = node.credits + creditCost;
             console.error('[shop] Failed to insert card:', insertError.message);
             socket.emit('shop:unlock_result', { success: false, reason: 'server_error' });
             return;
