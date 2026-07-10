@@ -831,3 +831,24 @@
     gap: 4px;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MANUAL ATTACK — whiff flash + distinct manual-hit damage numbers
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.fighter.whiff {
+  animation: whiffFlash 0.15s ease-out;
+}
+
+@keyframes whiffFlash {
+  0% { filter: brightness(1); }
+  50% { filter: brightness(2) drop-shadow(0 0 10px #fff); }
+  100% { filter: brightness(1); }
+}
+
+.floating-dmg.manual {
+  font-size: 1.5rem;
+  color: #fbbf24;
+  text-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  font-weight: 900;
+}

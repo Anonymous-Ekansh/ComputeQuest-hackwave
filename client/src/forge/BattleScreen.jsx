@@ -6,10 +6,12 @@ import './BattleScreen.css';
 // ── Arena constants ──────────────────────────────────────────────────────────
 const ARENA_W = 700;
 const ARENA_H = 400;
-const CHAR_SIZE = 36;
-const MOVE_SPEED = 2.5;          // px per tick (player & bot)
-const ATTACK_RANGE = 55;         // px — close enough to hit
-const ATTACK_COOLDOWN = 900;     // ms between attacks
+const CHAR_SIZE = 48;
+const MOVE_SPEED = 2;          // px per tick (player & bot)
+const ATTACK_RANGE = 80;         // px — close enough to hit
+const ATTACK_COOLDOWN = 1200;     // ms between attacks
+const MANUAL_ATTACK_MULTIPLIER = 1.4;
+const MANUAL_ATTACK_COOLDOWN = 500; // ms
 const TICK_MS = 16;              // ~60 fps
 const HINT_DURATION = 4000;      // control hint stays visible (ms)
 const HP_SCALE = 8;              // base HP multiplier (attack + defense) * scale
@@ -92,9 +94,10 @@ export default function BattleScreen({
   useEffect(() => {
     if (battleState !== STATES.BATTLING) return;
 
-    function onDown(e) {
+    function handleKeyDown(e) {
       const k = e.key.toLowerCase();
       keysRef.current.add(k);
+      if (k === ' ' && !e.repeat) keysRef.current.spacebarJustPressed = true;
 
       // number keys → switch selected character
       if (k >= '1' && k <= '4') {
@@ -108,10 +111,10 @@ export default function BattleScreen({
     }
     function onUp(e) { keysRef.current.delete(e.key.toLowerCase()); }
 
-    window.addEventListener('keydown', onDown);
+    window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', onUp);
     return () => {
-      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', onUp);
       keysRef.current.clear();
     };
@@ -172,6 +175,9 @@ export default function BattleScreen({
       const keys = keysRef.current;
       const selIdx = selectedIdxRef.current;
 
+      const spacePressed = keys.spacebarJustPressed;
+      keys.spacebarJustPressed = false;
+
       // ── move selected player character ──
       const sel = updated[selIdx];
       if (sel && sel.team === 'player' && sel.alive) {
@@ -222,7 +228,8 @@ export default function BattleScreen({
       }
 
       // ── player auto-attacks: if selected character is in range, attack on cooldown ──
-      for (const pf of updated) {
+      for (let i = 0; i < updated.length; i++) {
+        const pf = updated[i];
         if (pf.team !== 'player' || !pf.alive) continue;
 
         const enemies = updated.filter(f => f.team === 'bot' && f.alive);
@@ -236,8 +243,28 @@ export default function BattleScreen({
           if (d < nearDist) { nearest = e; nearDist = d; }
         }
 
+        const isSelected = (i === selIdx);
+        let manualDidFire = false;
+
+        if (isSelected && spacePressed) {
+          if (nearDist <= ATTACK_RANGE && now - (pf.lastManualAttackAt || 0) >= MANUAL_ATTACK_COOLDOWN) {
+            // MANUAL ATTACK
+            const damage = Math.floor(dmg(pf, nearest) * MANUAL_ATTACK_MULTIPLIER);
+            nearest.hp = Math.max(0, nearest.hp - damage);
+            nearest.hitTimer = now;
+            pf.lastManualAttackAt = now;
+            pf.lungeDir = Math.atan2(nearest.y - pf.y, nearest.x - pf.x);
+            nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isManual: true });
+            if (nearest.hp <= 0) nearest.alive = false;
+            manualDidFire = true;
+          } else {
+            // WHIFF
+            pf.whiffTimer = now;
+          }
+        }
+
         // auto-attack on cooldown when in range
-        if (nearDist <= ATTACK_RANGE && now - pf.lastAttackAt >= ATTACK_COOLDOWN) {
+        if (!manualDidFire && nearDist <= ATTACK_RANGE && now - pf.lastAttackAt >= ATTACK_COOLDOWN) {
           const damage = dmg(pf, nearest);
           nearest.hp = Math.max(0, nearest.hp - damage);
           nearest.hitTimer = now;
@@ -409,9 +436,15 @@ export default function BattleScreen({
           {fighters.map((f, idx) => {
             const isSelected = f.team === 'player' && idx === selectedIdx;
             const isHit = f.hitTimer && now - f.hitTimer < 200;
-            const isAttacking = f.lungeDir && now - f.lastAttackAt < 150;
-            const lungeX = isAttacking ? Math.cos(f.lungeDir) * 8 : 0;
-            const lungeY = isAttacking ? Math.sin(f.lungeDir) * 8 : 0;
+            const isAutoAttacking = f.lungeDir !== undefined && now - f.lastAttackAt < 150;
+            const isManualAttacking = f.lungeDir !== undefined && now - (f.lastManualAttackAt || 0) < 150;
+            const isAttacking = isAutoAttacking || isManualAttacking;
+            
+            const lungeDist = isManualAttacking ? 20 : (isAutoAttacking ? 8 : 0);
+            const lungeX = isAttacking ? Math.cos(f.lungeDir) * lungeDist : 0;
+            const lungeY = isAttacking ? Math.sin(f.lungeDir) * lungeDist : 0;
+            
+            const isWhiffing = now - (f.whiffTimer || 0) < 150;
             const hpPct = f.maxHp > 0 ? (f.hp / f.maxHp) * 100 : 0;
             const typeColor = f.card.type === 'OVERCLOCK' ? '#f97316'
               : f.card.type === 'COOLANT' ? '#06b6d4' : '#a855f7';
@@ -430,6 +463,7 @@ export default function BattleScreen({
                   f.alive ? '' : 'dead',
                   isSelected ? 'selected' : '',
                   isHit ? 'hit' : '',
+                  isWhiffing ? 'whiff' : ''
                 ].join(' ')}
                 style={{
                   left: f.x - CHAR_SIZE / 2 + lungeX,
@@ -472,13 +506,13 @@ export default function BattleScreen({
                   return (
                     <span
                       key={d.id}
-                      className="floating-dmg"
+                      className={`floating-dmg ${d.isManual ? 'manual' : ''}`}
                       style={{
                         opacity,
                         transform: `translateY(${yOff}px)`,
                       }}
                     >
-                      -{d.value}
+                      -{d.value}{d.isManual ? '!' : ''}
                     </span>
                   );
                 })}
@@ -500,6 +534,8 @@ export default function BattleScreen({
         {showHint && (
           <div className="control-hint">
             <span>WASD to move</span>
+            <span className="hint-sep">·</span>
+            <span>Spacebar to attack</span>
             <span className="hint-sep">·</span>
             <span>1/2/3/4 switch character</span>
             <span className="hint-sep">·</span>
