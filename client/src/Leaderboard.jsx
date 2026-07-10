@@ -41,13 +41,13 @@ const Leaderboard = () => {
           className={`leaderboard-toggle-btn ${mode === 'contributors' ? 'active' : ''}`}
           onClick={() => setMode('contributors')}
         >
-          🖥️ Contributors
+          Contributors
         </button>
         <button
           className={`leaderboard-toggle-btn ${mode === 'forgemasters' ? 'active' : ''}`}
           onClick={() => setMode('forgemasters')}
         >
-          🏆 Forgemasters
+          Forgemasters
         </button>
       </div>
 
@@ -76,13 +76,13 @@ const Leaderboard = () => {
               {leaderboard.map((user) => (
                 <tr key={user.username} className={user.rank <= 3 ? `top-${user.rank}` : ''}>
                   <td className="rank-cell">
-                    {user.rank === 1 ? '🥇' : user.rank === 2 ? '🥈' : user.rank === 3 ? '🥉' : `#${user.rank}`}
+                    #{user.rank}
                   </td>
                   <td className="name-cell">{user.username}</td>
                   <td className="score-cell">
                     {mode === 'contributors'
                       ? (user.total_contributed || 0).toLocaleString()
-                      : `🏆 ${user.trophies || 0}`
+                      : `Trophies: ${user.trophies || 0}`
                     }
                   </td>
                 </tr>

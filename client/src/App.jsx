@@ -197,7 +197,7 @@ function App() {
                 <div className="auth-user-info">
                   <strong className="user-meta">{userInfo.username}</strong>
                   <span className="credit-display" title="Credits earned from computing">
-                    <span className="credit-icon">⚡</span>
+                    <span className="credit-icon"></span>
                     <span className="credit-value">{userInfo.credits} credits</span>
                   </span>
                 </div>

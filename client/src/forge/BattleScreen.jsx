@@ -276,7 +276,7 @@ export default function BattleScreen({
           setServerConfirmed(true);
           setConfirmedData(data);
           if (data.tierEscalation) {
-            setToast(`⚠️ The bot is getting tougher — ${data.tierEscalation.newTier} opponents ahead!`);
+            setToast(`Alert: The bot is getting tougher — ${data.tierEscalation.newTier} opponents ahead!`);
           }
           socket.off('battle:result_confirmed', handler);
         };
@@ -312,13 +312,13 @@ export default function BattleScreen({
     return (
       <div className="battle-screen">
         <div className="battle-idle">
-          <div className="battle-idle-icon">⚔️</div>
+          <div className="battle-idle-icon">Battle</div>
           <h3>Battle Arena</h3>
           {hasDeck ? (
             <>
               <p>Command your characters in real-time combat!</p>
               <div className="battle-trophy-display">
-                <span className="trophy-icon">🏆</span>
+                <span className="trophy-icon">Trophies:</span>
                 <span className="trophy-count">{trophies || 0}</span>
                 <span className="trophy-label">Trophies</span>
               </div>
@@ -326,14 +326,14 @@ export default function BattleScreen({
                 <span className="bot-label">Opponent: {getBotTier(trophies || 0).name}</span>
               </div>
               <button className="battle-start-btn" onClick={startBattle}>
-                ⚔️ Find Opponent
+                Find Opponent
               </button>
             </>
           ) : (
             <>
               <p className="battle-disabled-msg">Build a deck first to enter battle.</p>
               <button className="battle-edit-btn" onClick={onEditDeck}>
-                🃏 Go to Deck Builder
+                Go to Deck Builder
               </button>
             </>
           )}
@@ -371,7 +371,7 @@ export default function BattleScreen({
             </div>
           </div>
           <button className="battle-go-btn" onClick={beginFight}>
-            ⚔️ Start Battle!
+            Start Battle!
           </button>
         </div>
       </div>
@@ -444,7 +444,7 @@ export default function BattleScreen({
                 {isSelected && f.alive && <div className="select-ring" />}
 
                 {/* Character glyph */}
-                <span className="fighter-glyph">{f.card.glyph || '⚒️'}</span>
+                <span className="fighter-glyph">{f.card.glyph || '?'}</span>
 
                 {/* Player number */}
                 {playerNum && f.alive && (
@@ -490,7 +490,7 @@ export default function BattleScreen({
           {winner && (
             <div className={`arena-overlay ${winner === 'player' ? 'victory' : 'defeat'}`}>
               <span className="overlay-text">
-                {winner === 'player' ? '🎉 VICTORY' : '💔 DEFEAT'}
+                {winner === 'player' ? 'VICTORY' : 'DEFEAT'}
               </span>
             </div>
           )}
@@ -545,12 +545,12 @@ export default function BattleScreen({
       <div className="battle-screen">
         <div className={`battle-result ${won ? 'victory' : 'defeat'}`}>
           <div className="result-banner">
-            <span className="result-icon">{won ? '🎉' : '💔'}</span>
+            <span className="result-icon">{won ? 'WIN' : 'LOSS'}</span>
             <h2>{won ? 'Victory!' : 'Defeat'}</h2>
           </div>
 
           <div className="trophy-change">
-            <span className="trophy-icon-large">🏆</span>
+            <span className="trophy-icon-large">Trophies:</span>
             {serverConfirmed && confirmedData?.success ? (
               <div className="trophy-delta">
                 <span className={`delta-number ${delta > 0 ? 'positive' : 'negative'}`}>
@@ -570,13 +570,13 @@ export default function BattleScreen({
 
           <div className="result-actions">
             <button className="battle-again-btn" onClick={startBattle}>
-              ⚔️ Battle Again
+              Battle Again
             </button>
             <button className="result-nav-btn" onClick={onEditDeck}>
-              🃏 Edit Deck
+              Edit Deck
             </button>
             <button className="result-nav-btn" onClick={onVisitShop}>
-              🏪 Visit Shop
+              Visit Shop
             </button>
           </div>
         </div>

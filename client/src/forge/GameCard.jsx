@@ -34,7 +34,7 @@ export default function GameCard({
 
   const stars = getRarityStars(card.rarity);
   const maxStars = 3;
-  const glyph = card.glyph || '⚒️';
+  const glyph = card.glyph || '?';
   const typeColor = TYPE_COLORS[card.type] || '#818cf8';
 
   if (state === 'facedown') {
@@ -45,7 +45,7 @@ export default function GameCard({
         alignItems: 'center',
         justifyContent: 'center',
       }}>
-        <span style={{ fontSize: '2rem', opacity: 0.3 }}>⚒️</span>
+        <span style={{ fontSize: '2rem', opacity: 0.3 }}>?</span>
         <span style={{ fontSize: '0.7rem', color: '#475569', marginTop: 8 }}>???</span>
       </div>
     );
@@ -60,7 +60,7 @@ export default function GameCard({
       tabIndex={onClick ? 0 : undefined}
     >
       {showCost && (
-        <span className="card-cost">💎 {card.cost}</span>
+        <span className="card-cost">{card.cost}</span>
       )}
 
       {/* Character portrait — the hero visual */}
@@ -87,8 +87,8 @@ export default function GameCard({
 
       {/* Stats at bottom */}
       <div className="card-stats">
-        <span className="card-stat attack">⚔ {card.attack}</span>
-        <span className="card-stat defense">🛡 {card.defense}</span>
+        <span className="card-stat attack">ATK: {card.attack}</span>
+        <span className="card-stat defense">DEF: {card.defense}</span>
       </div>
     </div>
   );

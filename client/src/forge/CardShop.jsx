@@ -72,7 +72,7 @@ export default function CardShop({ socket, crystals, ownedCards }) {
             {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
             {f !== 'all' && (
               <span className="filter-cost">
-                {f === 'common' ? '10💎' : f === 'uncommon' ? '25💎' : '50💎'}
+                {f === 'common' ? '10' : f === 'uncommon' ? '25' : '50'}
               </span>
             )}
           </button>
@@ -82,7 +82,7 @@ export default function CardShop({ socket, crystals, ownedCards }) {
       {/* Error toast */}
       {error && (
         <div className="shop-error">
-          <span>⚠️ {error}</span>
+          <span>Error: {error}</span>
         </div>
       )}
 

@@ -72,7 +72,7 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle })
     return (
       <div className="deck-builder">
         <div className="deck-empty-state">
-          <div className="empty-icon">🃏</div>
+          <div className="empty-icon">Empty</div>
           <h3>Unlock at least 4 cards to build a deck</h3>
           <p>Visit the Card Shop to unlock cards with your earned crystals.</p>
           <div className="empty-progress">
@@ -132,7 +132,7 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle })
         </button>
         {deckComplete && savedDeck && savedDeck.length === DECK_SIZE && (
           <button className="deck-battle-btn" onClick={onBattle}>
-            ⚔️ Go to Battle
+            Go to Battle
           </button>
         )}
       </div>
@@ -140,7 +140,7 @@ export default function DeckBuilder({ socket, ownedCards, savedDeck, onBattle })
       {/* Save message */}
       {saveMessage && (
         <div className={`deck-message ${saveMessage.type}`}>
-          {saveMessage.type === 'success' ? '✓' : '⚠️'} {saveMessage.text}
+          {saveMessage.type === 'success' ? 'Success:' : 'Error:'} {saveMessage.text}
         </div>
       )}
 
