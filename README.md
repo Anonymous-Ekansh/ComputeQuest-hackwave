@@ -8,7 +8,7 @@ No downloads. No sign-up friction. Just open a tab and start contributing.
 
 ---
 
-## How it works
+## How it works.
 
 ```
 Your browser tab → Web Worker runs compute chunks silently in background
