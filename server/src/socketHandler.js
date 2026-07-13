@@ -806,7 +806,7 @@ function setupSocketHandler(io) {
         username: user.username,
         credits: user.credits,
         isAuthenticated: true,
-        isEligibleForUpgrade: user.can_upgrade,
+        isEligibleForUpgrade: true,
         trophies,
         ownedCards: gameData.ownedCards,
         savedDeck: gameData.savedDeck,
@@ -1079,7 +1079,7 @@ function setupSocketHandler(io) {
           username: node.username,
           credits: node.credits,
           isAuthenticated: true,
-          isEligibleForUpgrade: node.userId ? (await loadUsers()).find(u => u.id === node.userId)?.can_upgrade : false,
+          isEligibleForUpgrade: true,
           trophies,
           ownedCards: gameData.ownedCards,
           savedDeck: gameData.savedDeck,
@@ -1178,7 +1178,7 @@ function setupSocketHandler(io) {
           username: node.username,
           credits: node.credits,
           isAuthenticated: true,
-          isEligibleForUpgrade: node.userId ? (await loadUsers()).find(u => u.id === node.userId)?.can_upgrade : false,
+          isEligibleForUpgrade: true,
           trophies: newTrophies,
           ownedCards: gameData.ownedCards,
           savedDeck: gameData.savedDeck,
@@ -1201,7 +1201,7 @@ function setupSocketHandler(io) {
 
         const usersList = await loadUsers();
         const dbUser = usersList.find(u => u.id === node.userId);
-        if (!dbUser || !dbUser.can_upgrade) {
+        if (!dbUser) {
           socket.emit('card:upgrade_result', { success: false, reason: 'not_eligible' });
           return;
         }
