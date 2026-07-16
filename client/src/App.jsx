@@ -121,6 +121,13 @@ function App() {
         addLog('Disconnected from server');
       });
 
+      // Respond to server's pre-generation health check
+      socket.on('pipeline:ping', (data, callback) => {
+        if (typeof callback === 'function') {
+          callback({ status: 'ok' });
+        }
+      });
+
       socket.on('node_count', (count) => {
         setNodeCount(count);
       });
