@@ -1,5 +1,7 @@
-const { MATRIX_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS, DECK_SIZE, CREDITS_PER_CRYSTAL } = require('../../shared/constants');
+const { MATRIX_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS, DECK_SIZE, CREDITS_PER_CRYSTAL, LLM_LAYERS } = require('../../shared/constants');
 const { CARD_MAP } = require('../../shared/cards');
+const { getTokenizer } = require('./tokenizer');
+const { planStages } = require('./taskQueue');
 const { getBotTier } = require('../../shared/bots');
 const { simulateBattle } = require('../../shared/battleLogic');
 const fs = require('fs');
@@ -185,6 +187,10 @@ const taskQueue = [];
 // chunks that timed out with no idle node available — requeued for next idle
 // { taskId, chunkId }
 const requeuedChunks = [];
+
+// ── pipeline state ───────────────────────────────────────────────────────────
+// sessionId -> { stages: [ {stageIndex, socketId, ...} ], activeNodes: Set<socketId>, promptTokens: number[], currentTokenIndex: number, posOff: number }
+const activePipelines = new Map();
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -708,6 +714,34 @@ async function tryReassemble(taskId, io) {
   tryDispatchNext(io);
 }
 
+// ── pipeline helpers ──────────────────────────────────────────────────────────
+
+function abortPipelineSession(sessionId, io, reason) {
+  const session = activePipelines.get(sessionId);
+  if (!session) return;
+  
+  for (const nodeId of session.activeNodes) {
+    markIdle(nodeId, io);
+  }
+  
+  const clientSocket = io.sockets.sockets.get(session.clientSocketId);
+  if (clientSocket) {
+    clientSocket.emit('generation_error', { sessionId, reason });
+  }
+  
+  activePipelines.delete(sessionId);
+}
+
+function finishPipelineSession(sessionId, io) {
+  const session = activePipelines.get(sessionId);
+  if (!session) return;
+  
+  for (const nodeId of session.activeNodes) {
+    markIdle(nodeId, io);
+  }
+  activePipelines.delete(sessionId);
+}
+
 // ── socket setup ─────────────────────────────────────────────────────────────
 
 function setupSocketHandler(io) {
@@ -783,6 +817,7 @@ function setupSocketHandler(io) {
     }
 
     // register this node
+    socket.on('dev_auth', () => { const n = nodes.get(socket.id); if(n) n.status = 'idle'; });
     nodes.set(socket.id, {
       id: socket.id,
       userId: user ? user.id : null,
@@ -1292,11 +1327,142 @@ function setupSocketHandler(io) {
         socket.emit('card:upgrade_result', { success: false, reason: 'server_error' });
       }
     });
+    // ── INFERENCE PIPELINE EVENTS ────────────────────────────────────────────
+
+    socket.on('start_generation', async ({ sessionId, prompt }) => {
+      const idleIds = getIdleNodeIds();
+      if (idleIds.length === 0) {
+        socket.emit('generation_error', { sessionId, reason: 'No idle nodes available for inference pipeline.' });
+        return;
+      }
+      
+      const stages = planStages(LLM_LAYERS, idleIds.length);
+      const assignedNodes = [];
+      for (let i = 0; i < stages.length; i++) {
+        const nodeId = idleIds[i];
+        markBusy(nodeId);
+        assignedNodes.push(nodeId);
+        stages[i].socketId = nodeId;
+      }
+      
+      let allResponded = true;
+      try {
+        await Promise.all(assignedNodes.map(nodeId => {
+          return new Promise((resolve, reject) => {
+            const targetSocket = io.sockets.sockets.get(nodeId);
+            if (!targetSocket) return reject(new Error('Node missing'));
+            
+            const timer = setTimeout(() => reject(new Error('Ping timeout')), 3000);
+            
+            targetSocket.emit('pipeline:ping', {}, () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+        }));
+      } catch (err) {
+        allResponded = false;
+      }
+      
+      if (!allResponded) {
+        assignedNodes.forEach(nodeId => markIdle(nodeId, io));
+        socket.emit('generation_error', { sessionId, reason: 'Ping failed for pipeline nodes. Aborting.' });
+        return;
+      }
+      
+      const tokenizer = getTokenizer();
+      const chatPrompt = tokenizer.applyChatTemplate(prompt);
+      const tokenIds = tokenizer.encode(chatPrompt);
+      
+      activePipelines.set(sessionId, {
+        clientSocketId: socket.id,
+        stages,
+        activeNodes: new Set(assignedNodes),
+        promptTokens: tokenIds,
+        posOff: 0
+      });
+      
+      stages.forEach(stage => {
+        const targetSocket = io.sockets.sockets.get(stage.socketId);
+        if (targetSocket) {
+          targetSocket.emit('stage_assign', {
+            sessionId,
+            stageIndex: stage.stageIndex,
+            layerRange: stage.layerRange,
+            role: stage.role
+          });
+        }
+      });
+      
+      const stage0Socket = io.sockets.sockets.get(stages[0].socketId);
+      if (stage0Socket) {
+        stage0Socket.emit('forward_request', {
+          sessionId,
+          stageIndex: 0,
+          hiddenStates: null,
+          positionId: 0,
+          tokenIndex: tokenIds
+        });
+      }
+    });
+
+    socket.on('forward_response', ({ sessionId, stageIndex, hiddenStates, tokenId, tokenText }) => {
+      const session = activePipelines.get(sessionId);
+      if (!session) return;
+      
+      const isLastStage = stageIndex === session.stages.length - 1;
+      
+      if (!isLastStage) {
+        const nextStage = session.stages[stageIndex + 1];
+        const nextSocket = io.sockets.sockets.get(nextStage.socketId);
+        if (nextSocket) {
+          nextSocket.emit('forward_request', {
+            sessionId,
+            stageIndex: nextStage.stageIndex,
+            hiddenStates,
+            positionId: session.posOff,
+            tokenIndex: null
+          });
+        }
+      } else {
+        const clientSocket = io.sockets.sockets.get(session.clientSocketId);
+        if (clientSocket) {
+          clientSocket.emit('final_token', { sessionId, tokenId, tokenText });
+        }
+        
+        const tokenizer = getTokenizer();
+        if (tokenId === tokenizer.eosId) {
+          finishPipelineSession(sessionId, io);
+        } else {
+          const tokensSentSoFar = session.posOff === 0 ? session.promptTokens.length : 1;
+          session.posOff += tokensSentSoFar;
+          
+          const stage0 = session.stages[0];
+          const stage0Socket = io.sockets.sockets.get(stage0.socketId);
+          if (stage0Socket) {
+            stage0Socket.emit('forward_request', {
+              sessionId,
+              stageIndex: 0,
+              hiddenStates: null,
+              positionId: session.posOff,
+              tokenIndex: [tokenId]
+            });
+          }
+        }
+      }
+    });
 
     socket.on('disconnect', () => {
       // remove from pool FIRST so it can't be picked as a reassignment target
       nodes.delete(socket.id);
       nodePerformance.delete(socket.id);
+
+      // Pipeline disconnect check
+      for (const [sessionId, session] of activePipelines.entries()) {
+        if (session.activeNodes.has(socket.id)) {
+          abortPipelineSession(sessionId, io, 'a node dropped — restarting');
+        }
+      }
 
       // immediately reassign any in-flight chunks from this node
       for (const [taskId, task] of pendingTasks) {
