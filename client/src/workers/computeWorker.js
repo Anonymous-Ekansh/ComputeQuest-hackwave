@@ -15,10 +15,11 @@ import {
 // sessionId -> { device, embedding, layers: [ { weights, kvCache } ], finalHead }
 const pipelineSessions = new Map();
 
+const MODEL_BASE_URL = import.meta.env.VITE_MODEL_URL || 'http://localhost:3001/models';
+
 // Helper to fetch binaries from the server
 async function readBin(filename) {
-  const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
-  const res = await fetch(`${SERVER_URL}/models/${filename}`);
+  const res = await fetch(`${MODEL_BASE_URL}/${filename}`);
   if (!res.ok) throw new Error(`Failed to load ${filename}`);
   return await res.arrayBuffer();
 }
@@ -74,7 +75,7 @@ self.onmessage = async function (e) {
       const adapter = await navigator.gpu.requestAdapter();
       const device = await adapter.requestDevice();
 
-      const manifestRes = await fetch(`${import.meta.env.VITE_SERVER_URL || 'http://localhost:3001'}/models/manifest.json`);
+      const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`);
       const rawManifest = await manifestRes.json();
       const files = rawManifest.files;  // array of { filename, tensors, size_bytes, ... }
 
