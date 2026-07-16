@@ -344,6 +344,36 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
 }
 `;
 
+/* ── 2j. Embedding Lookup ──────────────────────────────────────────────── */
+
+const embeddingShader = /* wgsl */ `
+struct Params {
+  seq_len     : u32,
+  hidden_size : u32,
+  vocab_size  : u32,
+  _p          : u32,
+}
+
+@group(0) @binding(0) var<storage, read>       tokens : array<u32>;
+@group(0) @binding(1) var<storage, read>       embed  : array<f32>;
+@group(0) @binding(2) var<storage, read_write> out    : array<f32>;
+@group(0) @binding(3) var<uniform>             params : Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
+  let idx = gid.x;
+  let total = params.seq_len * params.hidden_size;
+  if (idx >= total) { return; }
+  
+  let token_idx = idx / params.hidden_size;
+  let dim_idx   = idx % params.hidden_size;
+  let token_id  = tokens[token_idx];
+  
+  if (token_id >= params.vocab_size) { return; }
+  out[idx] = embed[token_id * params.hidden_size + dim_idx];
+}
+`;
+
 // ════════════════════════════════════════════════════════════════════════════
 // 3. Pipeline cache & helpers
 // ════════════════════════════════════════════════════════════════════════════
@@ -372,6 +402,7 @@ function ensurePipelines(device) {
     attnOut   : mk(attnOutShader),
     siluMul   : mk(siluMulShader),
     add       : mk(addShader),
+    embedding : mk(embeddingShader),
   };
   _pCache.set(device, p);
   return p;
@@ -784,5 +815,112 @@ export function loadLayerWeights(device, binBuffer, tensorEntries) {
     gate_proj: dq('mlp.gate_proj.weight'),
     up_proj:   dq('mlp.up_proj.weight'),
     down_proj: dq('mlp.down_proj.weight'),
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 8. Embedding and LM Head execution
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Run embedding lookup.
+ * @param {GPUDevice} device
+ * @param {GPUBuffer} embedWeight f32 buffer of shape [VOCAB_SIZE, HIDDEN_SIZE]
+ * @param {Uint32Array} tokens array of token IDs
+ * @param {number} vocabSize
+ * @returns {GPUBuffer} hidden states buffer of shape [tokens.length, HIDDEN_SIZE]
+ */
+export function runEmbedding(device, embedWeight, tokens, vocabSize) {
+  const P = ensurePipelines(device);
+  const enc = device.createCommandEncoder();
+  const seqLen = tokens.length;
+  const HS = HIDDEN_SIZE;
+  
+  const tokenBuf = uploadBuf(device, new Uint32Array(tokens));
+  const outBuf = mkBuf(device, seqLen * HS * 4);
+  const uBuf = mkUniform(device, [
+    [seqLen, 'u32'], [HS, 'u32'], [vocabSize, 'u32'], [0, 'u32'],
+  ]);
+
+  doPass(device, enc, P.embedding, [tokenBuf, embedWeight, outBuf, uBuf], Math.ceil((seqLen * HS) / 256));
+  device.queue.submit([enc.finish()]);
+  
+  tokenBuf.destroy();
+  uBuf.destroy();
+  return outBuf;
+}
+
+/**
+ * Run the final RMSNorm and LM Head matmul for the LAST token only.
+ * @param {GPUDevice} device
+ * @param {Object} w { norm: GPUBuffer, lm_head: GPUBuffer }
+ * @param {GPUBuffer} hBuf Hidden states [seqLen, HIDDEN_SIZE]
+ * @param {number} seqLen
+ * @param {number} vocabSize
+ * @returns {GPUBuffer} logits of shape [1, vocabSize]
+ */
+export function runFinalHead(device, w, hBuf, seqLen, vocabSize) {
+  const P = ensurePipelines(device);
+  const enc = device.createCommandEncoder();
+  const HS = HIDDEN_SIZE;
+
+  // Slice last token
+  const lastH = mkBuf(device, HS * 4);
+  enc.copyBufferToBuffer(hBuf, (seqLen - 1) * HS * 4, lastH, 0, HS * 4);
+
+  // RMSNorm
+  const normed = mkBuf(device, HS * 4);
+  const normU = mkUniform(device, [
+    [HS, 'u32'], [1, 'u32'], [RMS_NORM_EPS, 'f32'], [0, 'u32'],
+  ]);
+  doPass(device, enc, P.rmsNorm, [lastH, w.norm, normed, normU], Math.ceil(HS / 64));
+
+  // Matmul (Logits)
+  const logits = mkBuf(device, vocabSize * 4);
+  const matmulU = mkUniform(device, [
+    [1, 'u32'], [vocabSize, 'u32'], [HS, 'u32'], [0, 'u32']
+  ]);
+  doPass(device, enc, P.matmul, [normed, w.lm_head, logits, matmulU], 1, Math.ceil(vocabSize / 16));
+
+  device.queue.submit([enc.finish()]);
+  
+  lastH.destroy();
+  normed.destroy();
+  normU.destroy();
+  matmulU.destroy();
+  return logits;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 9. Loaders for Embedding and Final Head
+// ════════════════════════════════════════════════════════════════════════════
+
+export function loadEmbeddingWeights(device, binBuffer, tensorEntries) {
+  const lookup = {};
+  for (const e of tensorEntries) lookup[e.name] = e;
+  const get = (suffix) => lookup[Object.keys(lookup).find((k) => k.endsWith(suffix))];
+  const readI8  = (e) => new Int8Array(binBuffer, e.byte_offset, e.byte_length);
+  const readF32 = (e) => new Float32Array(binBuffer, e.byte_offset, e.byte_length / 4);
+
+  const qe = get('embed_tokens.weight.quantized');
+  const se = get('embed_tokens.weight.scale');
+  const shape = qe.shape;
+  return dequantizeWeights(device, readI8(qe), readF32(se), shape[0], shape[1]);
+}
+
+export function loadFinalHeadWeights(device, binBuffer, tensorEntries) {
+  const lookup = {};
+  for (const e of tensorEntries) lookup[e.name] = e;
+  const get = (suffix) => lookup[Object.keys(lookup).find((k) => k.endsWith(suffix))];
+  const readI8  = (e) => new Int8Array(binBuffer, e.byte_offset, e.byte_length);
+  const readF32 = (e) => new Float32Array(binBuffer, e.byte_offset, e.byte_length / 4);
+
+  const qe = get('lm_head.weight.quantized');
+  const se = get('lm_head.weight.scale');
+  const shape = qe.shape;
+  
+  return {
+    norm: uploadFloat32(device, readF32(get('norm.weight'))),
+    lm_head: dequantizeWeights(device, readI8(qe), readF32(se), shape[0], shape[1])
   };
 }

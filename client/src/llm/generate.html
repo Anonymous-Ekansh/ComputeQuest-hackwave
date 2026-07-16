@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TinyLlama WebGPU Single-Node Generator</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; line-height: 1.5; }
+    .controls { margin-bottom: 1rem; padding: 1rem; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }
+    input[type="text"] { width: 100%; padding: 0.5rem; margin-bottom: 1rem; font-size: 1rem; box-sizing: border-box; }
+    button { padding: 0.5rem 1rem; font-size: 1rem; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    pre { background: #222; color: #0f0; padding: 1rem; overflow-x: auto; border-radius: 4px; min-height: 200px; white-space: pre-wrap; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>TinyLlama WebGPU Generator</h1>
+  <p>Load the <code>server/models</code> directory from the local static server.</p>
+  
+  <div class="controls">
+    <button id="load-btn">Load Model</button>
+    <span id="load-status">Not loaded.</span>
+  </div>
+
+  <div class="controls">
+    <label>Prompt:</label>
+    <input type="text" id="prompt-input" value="What is the capital of France?">
+    <button id="generate-btn" disabled>Generate</button>
+  </div>
+  
+  <h3>Output</h3>
+  <pre id="log-output">Ready...</pre>
+
+  <script type="module">
+    import { Generator } from './single-node-generate.js';
+
+    const logEl = document.getElementById('log-output');
+    function log(msg) {
+      logEl.textContent += msg;
+      // scroll to bottom
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    let generator = null;
+
+    document.getElementById('load-btn').addEventListener('click', async () => {
+      try {
+        if (!navigator.gpu) throw new Error("WebGPU not supported in this browser.");
+        
+        document.getElementById('load-status').textContent = 'Acquiring GPU...';
+        
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) throw new Error("No WebGPU adapter found.");
+        const device = await adapter.requestDevice();
+        
+        generator = new Generator(device);
+        document.getElementById('load-status').textContent = 'Loading models into VRAM...';
+        
+        // redirect log to the text area temporarily
+        const oldText = logEl.textContent;
+        logEl.textContent = "";
+        
+        const MODELS_URL = '../../../server/models';
+        await generator.loadFromUrl(MODELS_URL, (msg) => {
+          log(msg + '\n');
+        });
+        
+        document.getElementById('load-status').textContent = '✅ Ready.';
+        document.getElementById('generate-btn').disabled = false;
+        
+      } catch (err) {
+        alert(err.message);
+        document.getElementById('load-status').textContent = '❌ Error loading.';
+        console.error(err);
+      }
+    });
+
+    document.getElementById('generate-btn').addEventListener('click', async () => {
+      if (!generator) return;
+      const prompt = document.getElementById('prompt-input').value;
+      if (!prompt.trim()) return;
+      
+      document.getElementById('generate-btn').disabled = true;
+      logEl.textContent = ""; // clear output
+      
+      try {
+        await generator.generate(prompt, 40, (tokenStr) => {
+          log(tokenStr);
+        });
+      } catch (err) {
+        log(`\n\n[ERROR]: ${err.message}`);
+        console.error(err);
+      } finally {
+        document.getElementById('generate-btn').disabled = false;
+        log('\n\n[Done]');
+      }
+    });
+  </script>
+</body>
+</html>
