@@ -1,39 +1,239 @@
-// Web Worker for distributed matrix multiplication
-// Receives a CHUNK of rows from matrix A and the full matrix B,
-// computes only the assigned rows, and returns them with timing info.
+// Web Worker for distributed matrix multiplication & Inference Pipeline
 
-self.onmessage = function (e) {
-  const { taskId, chunkId, chunkData, startRow, rowCount, totalRows } = e.data;
-  const { rowsA, matrixB } = chunkData;
+import {
+  runEmbedding,
+  runDecoderLayer,
+  runFinalHead,
+  loadEmbeddingWeights,
+  loadLayerWeights,
+  loadFinalHeadWeights,
+  uploadBuf,
+  readBuffer
+} from '../llm/webgpu-kernels.js';
 
-  const cols = matrixB[0].length;
-  const inner = matrixB.length; // shared dimension (columns of A / rows of B)
+// Pipeline State
+// sessionId -> { device, embedding, layers: [ { weights, kvCache } ], finalHead }
+const pipelineSessions = new Map();
 
-  const startTime = Date.now();
+// Helper to fetch binaries from the server
+async function readBin(filename) {
+  const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+  const res = await fetch(`${SERVER_URL}/models/${filename}`);
+  if (!res.ok) throw new Error(`Failed to load ${filename}`);
+  return await res.arrayBuffer();
+}
 
-  // multiply only the rows assigned to this node
-  const resultRows = [];
-  for (let i = 0; i < rowsA.length; i++) {
-    const row = [];
-    for (let j = 0; j < cols; j++) {
-      let sum = 0;
-      for (let k = 0; k < inner; k++) {
-        sum += rowsA[i][k] * matrixB[k][j];
+self.onmessage = async function (e) {
+  const data = e.data;
+  const type = data.type || 'MATRIX_MULTIPLY';
+
+  if (type === 'MATRIX_MULTIPLY') {
+    // ── LEGACY MATRIX MULTIPLY ROUTE ──
+    const { taskId, chunkId, chunkData, startRow, rowCount, totalRows } = data;
+    const { rowsA, matrixB } = chunkData;
+
+    const cols = matrixB[0].length;
+    const inner = matrixB.length;
+
+    const startTime = Date.now();
+
+    const resultRows = [];
+    for (let i = 0; i < rowsA.length; i++) {
+      const row = [];
+      for (let j = 0; j < cols; j++) {
+        let sum = 0;
+        for (let k = 0; k < inner; k++) {
+          sum += rowsA[i][k] * matrixB[k][j];
+        }
+        row.push(sum);
       }
-      row.push(sum);
+      resultRows.push(row);
     }
-    resultRows.push(row);
+
+    const computeMs = Date.now() - startTime;
+
+    self.postMessage({
+      type: 'chunk_result',
+      taskId,
+      chunkId,
+      resultRows,
+      computeMs,
+      startRow,
+      rowCount,
+      totalRows,
+    });
+    return;
   }
 
-  const computeMs = Date.now() - startTime;
+  if (type === 'stage_assign') {
+    // ── PIPELINE STAGE INITIALIZATION ──
+    try {
+      const { sessionId, stageIndex, layerRange, role } = data;
+      
+      if (!navigator.gpu) throw new Error("WebGPU not supported");
+      const adapter = await navigator.gpu.requestAdapter();
+      const device = await adapter.requestDevice();
 
-  self.postMessage({
-    taskId,
-    chunkId,
-    resultRows,
-    computeMs,
-    startRow,
-    rowCount,
-    totalRows,
-  });
+      const manifestRes = await fetch(`${import.meta.env.VITE_SERVER_URL || 'http://localhost:3001'}/models/manifest.json`);
+      const rawManifest = await manifestRes.json();
+      const manifest = Array.isArray(rawManifest) ? rawManifest : Object.values(rawManifest);
+
+      const sessionData = {
+        device,
+        embedding: null,
+        layers: [],
+        finalHead: null,
+        role,
+        layerRange
+      };
+
+      if (role === 'embedding' || role === 'all') {
+        const embedEntries = manifest.filter(e => e.file === 'embedding.bin' || (e.name && e.name.includes('embed_tokens')));
+        const embedBuf = await readBin('embedding.bin');
+        sessionData.embedding = loadEmbeddingWeights(device, embedBuf, embedEntries);
+      }
+
+      for (let i = layerRange[0]; i <= layerRange[1]; i++) {
+        const layerFile = `layers/layer_${i.toString().padStart(2, '0')}.bin`;
+        const lEntries = manifest.filter(e => e.file === layerFile || (e.name && e.name.includes(`layers.${i}.`)));
+        const lBuf = await readBin(layerFile);
+        
+        // Initial empty kvCache for this layer
+        const kvCache = { length: 0 };
+
+        sessionData.layers.push({
+          weights: loadLayerWeights(device, lBuf, lEntries),
+          kvCache
+        });
+      }
+
+      if (role === 'lm_head' || role === 'all') {
+        const finalEntries = manifest.filter(e => e.file === 'final_head.bin' || (e.name && (e.name.includes('lm_head') || e.name === 'model.norm.weight')));
+        const finalBuf = await readBin('final_head.bin');
+        sessionData.finalHead = loadFinalHeadWeights(device, finalBuf, finalEntries);
+      }
+
+      pipelineSessions.set(sessionId, sessionData);
+
+      self.postMessage({
+        type: 'stage_ready',
+        sessionId,
+        stageIndex
+      });
+    } catch (err) {
+      console.error("[Worker] Pipeline Init Error:", err);
+      self.postMessage({
+        type: 'stage_error',
+        sessionId: data.sessionId,
+        error: err.message
+      });
+    }
+    return;
+  }
+
+  if (type === 'forward_request') {
+    // ── PIPELINE COMPUTE PASS ──
+    try {
+      const { sessionId, stageIndex, hiddenStates, positionId, tokenIndex } = data;
+      const session = pipelineSessions.get(sessionId);
+      if (!session) throw new Error("Unknown session");
+
+      const { device } = session;
+      // currentState starts as either Float32Array from network or undefined (if prefill)
+      let currentStateBuf = null;
+
+      // 1. Embedding (if stage 0)
+      if (session.role === 'embedding' || session.role === 'all') {
+        // tokenIndex is an array of token IDs for prefill, or [tokenId] for autoregressive
+        const tokens = Array.isArray(tokenIndex) ? tokenIndex : [tokenIndex];
+        // runEmbedding returns a GPUBuffer
+        currentStateBuf = runEmbedding(device, session.embedding, tokens);
+      } else {
+        // Not stage 0: upload the incoming float32 array to a GPUBuffer
+        currentStateBuf = uploadBuf(device, hiddenStates);
+      }
+
+      // 2. Decoder Layers
+      // Determine how many tokens we are processing (seqLen)
+      // If it's stage 0, hiddenStates is null.
+      const seqLen = (session.role === 'embedding' || session.role === 'all') 
+          ? (Array.isArray(tokenIndex) ? tokenIndex.length : 1) 
+          : hiddenStates.length / 2048;
+
+      for (let i = 0; i < session.layers.length; i++) {
+        const layer = session.layers[i];
+        // runDecoderLayer returns { hiddenStates: GPUBuffer, kvCache: Object }
+        const res = runDecoderLayer(device, layer.weights, currentStateBuf, seqLen, layer.kvCache, positionId);
+        
+        // Destroy intermediate buffer if it's not the initial one uploaded
+        if (i > 0) currentStateBuf.destroy();
+        
+        currentStateBuf = res.hiddenStates;
+        layer.kvCache = res.kvCache;
+      }
+
+      // 3. Final Head (if last stage)
+      if (session.role === 'lm_head' || session.role === 'all') {
+        // Run final head on the last token's hidden state
+        const logitsBuf = runFinalHead(device, session.finalHead, currentStateBuf, seqLen);
+        const logits = await readBuffer(device, logitsBuf, 32000); // Wait for compute to finish and read logits
+        logitsBuf.destroy();
+        currentStateBuf.destroy();
+        
+        // Argmax
+        let maxVal = -Infinity;
+        let maxIdx = 0;
+        for (let i = 0; i < logits.length; i++) {
+          if (logits[i] > maxVal) {
+            maxVal = logits[i];
+            maxIdx = i;
+          }
+        }
+        
+        self.postMessage({
+          type: 'forward_response',
+          sessionId,
+          stageIndex,
+          tokenId: maxIdx
+        });
+      } else {
+        // Pass hidden state to next stage
+        const nextStageHiddenStates = await readBuffer(device, currentStateBuf, seqLen * 2048);
+        currentStateBuf.destroy();
+        
+        self.postMessage({
+          type: 'forward_response',
+          sessionId,
+          stageIndex,
+          hiddenStates: nextStageHiddenStates // sending Float32Array over postMessage
+        });
+      }
+    } catch (err) {
+      console.error("[Worker] Forward pass error:", err);
+      self.postMessage({
+        type: 'stage_error',
+        sessionId: data.sessionId,
+        error: err.message
+      });
+    }
+    return;
+  }
+
+  if (type === 'clear_session') {
+    // ── CLEANUP VRAM ──
+    const { sessionId } = data;
+    const session = pipelineSessions.get(sessionId);
+    if (session) {
+      // Destroy kvCaches to prevent VRAM memory fragmentation
+      for (const layer of session.layers) {
+        if (layer.kvCache && layer.kvCache.k) {
+          layer.kvCache.k.destroy();
+          layer.kvCache.v.destroy();
+        }
+      }
+      pipelineSessions.delete(sessionId);
+      console.log(`[Worker] Destroyed session ${sessionId} KV caches`);
+    }
+    return;
+  }
 };

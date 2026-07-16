@@ -420,7 +420,7 @@ function mkBuf(device, bytes) {
 }
 
 /** Upload typed-array to a storage buffer. */
-function uploadBuf(device, data) {
+export function uploadBuf(device, data) {
   const buf = device.createBuffer({
     size: data.byteLength,
     usage:

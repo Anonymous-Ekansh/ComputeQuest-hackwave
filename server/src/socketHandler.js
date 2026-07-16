@@ -1406,7 +1406,7 @@ function setupSocketHandler(io) {
       }
     });
 
-    socket.on('forward_response', ({ sessionId, stageIndex, hiddenStates, tokenId, tokenText }) => {
+    socket.on('forward_response', ({ sessionId, stageIndex, hiddenStates, tokenId }) => {
       const session = activePipelines.get(sessionId);
       if (!session) return;
       
@@ -1425,12 +1425,17 @@ function setupSocketHandler(io) {
           });
         }
       } else {
+        const tokenizer = getTokenizer();
+        let tokenText = '';
+        if (tokenId !== undefined) {
+          tokenText = tokenizer.decode([tokenId]);
+        }
+        
         const clientSocket = io.sockets.sockets.get(session.clientSocketId);
         if (clientSocket) {
           clientSocket.emit('final_token', { sessionId, tokenId, tokenText });
         }
         
-        const tokenizer = getTokenizer();
         if (tokenId === tokenizer.eosId) {
           finishPipelineSession(sessionId, io);
         } else {

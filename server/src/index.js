@@ -23,6 +23,10 @@ const io = new Server(server, {
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json());
 
+// static assets
+const path = require('path');
+app.use('/models', express.static(path.join(__dirname, '..', 'models')));
+
 // health check
 app.get('/', (req, res) => {
   res.json({ status: 'ComputeQuest server running' });
