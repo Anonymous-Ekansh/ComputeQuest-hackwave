@@ -143,7 +143,8 @@ self.onmessage = async function (e) {
   if (type === 'forward_request') {
     // ── PIPELINE COMPUTE PASS ──
     try {
-      const { sessionId, stageIndex, hiddenStates, positionId, tokenIndex } = data;
+      const { sessionId, stageIndex, hiddenStates: rawHiddenStates, positionId, tokenIndex } = data;
+      const hiddenStates = rawHiddenStates ? Float32Array.from(rawHiddenStates) : null;
       const session = pipelineSessions.get(sessionId);
       if (!session) throw new Error("Unknown session");
 

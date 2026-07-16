@@ -201,7 +201,7 @@ function App() {
           socket.emit('forward_response', {
             sessionId: msg.sessionId,
             stageIndex: msg.stageIndex,
-            hiddenStates: msg.hiddenStates,
+            hiddenStates: msg.hiddenStates ? Array.from(msg.hiddenStates) : null,
             tokenId: msg.tokenId
           });
         } else if (msg.type === 'stage_error') {
