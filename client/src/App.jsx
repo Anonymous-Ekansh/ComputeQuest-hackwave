@@ -110,10 +110,22 @@ function App() {
       });
       socketRef.current = socket;
 
-      socket.on('connect', () => {
+      socket.on('connect', async () => {
         setConnected(true);
         addLog('Connected to server');
-        socket.emit('register_worker', { supportsInference: !!navigator.gpu });
+        let supportsInference = false;
+        if (navigator.gpu) {
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            if (adapter) {
+              const device = await adapter.requestDevice();
+              if (device) supportsInference = true;
+            }
+          } catch (err) {
+            console.warn('WebGPU validation failed:', err);
+          }
+        }
+        socket.emit('register_worker', { supportsInference });
       });
 
       socket.on('disconnect', () => {

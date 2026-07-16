@@ -78,6 +78,7 @@ self.onmessage = async function (e) {
       const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`);
       const rawManifest = await manifestRes.json();
       const files = rawManifest.files;  // array of { filename, tensors, size_bytes, ... }
+      const vocabSize = rawManifest.vocab_size || 32000;
 
       // Helper: find a file entry by filename and return its tensors array
       const getTensors = (fname) => {
@@ -93,7 +94,8 @@ self.onmessage = async function (e) {
         layers: [],
         finalHead: null,
         role,
-        layerRange
+        layerRange,
+        vocabSize
       };
 
       if (role === 'embedding' || role === 'all') {
@@ -157,7 +159,7 @@ self.onmessage = async function (e) {
         // tokenIndex is an array of token IDs for prefill, or [tokenId] for autoregressive
         const tokens = Array.isArray(tokenIndex) ? tokenIndex : [tokenIndex];
         // runEmbedding returns a GPUBuffer
-        currentStateBuf = runEmbedding(device, session.embedding, tokens);
+        currentStateBuf = runEmbedding(device, session.embedding, tokens, session.vocabSize);
       } else {
         // Not stage 0: upload the incoming float32 array to a GPUBuffer
         currentStateBuf = uploadBuf(device, hiddenStates);
@@ -184,18 +186,18 @@ self.onmessage = async function (e) {
 
       // 3. Final Head (if last stage)
       if (session.role === 'lm_head' || session.role === 'all') {
-        // Run final head on the last token's hidden state
-        const logitsBuf = runFinalHead(device, session.finalHead, currentStateBuf, seqLen);
-        const logits = await readBuffer(device, logitsBuf, 32000); // Wait for compute to finish and read logits
+        const logitsBuf = runFinalHead(device, session.finalHead, currentStateBuf, seqLen, session.vocabSize);
+        const logits = await readBuffer(device, logitsBuf, seqLen * session.vocabSize);
         logitsBuf.destroy();
         currentStateBuf.destroy();
         
-        // Argmax
+        // Argmax only on the last token's logits
         let maxVal = -Infinity;
         let maxIdx = 0;
-        for (let i = 0; i < logits.length; i++) {
-          if (logits[i] > maxVal) {
-            maxVal = logits[i];
+        const offset = (seqLen - 1) * session.vocabSize;
+        for (let i = 0; i < session.vocabSize; i++) {
+          if (logits[offset + i] > maxVal) {
+            maxVal = logits[offset + i];
             maxIdx = i;
           }
         }
