@@ -1,0 +1,1 @@
+Requested path: manifest.json, HF URL: https://huggingface.co/datasets/iamekansh/hackwave/resolve/main/manifest.json

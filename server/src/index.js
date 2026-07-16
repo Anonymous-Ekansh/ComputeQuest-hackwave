@@ -24,8 +24,40 @@ app.use(cors({ origin: clientOrigin }));
 app.use(express.json());
 
 // static assets
-const path = require('path');
-app.use('/models', express.static(path.join(__dirname, '..', 'models')));
+const hfCache = new Map();
+
+app.get('/models/*', async (req, res) => {
+  const filePath = req.params[0];
+  
+  if (hfCache.has(filePath)) {
+    const cached = hfCache.get(filePath);
+    res.set('Content-Type', cached.contentType);
+    return res.send(cached.buffer);
+  }
+
+  const sanitizedPath = filePath.replace(/^\/+/, '');
+  const hfUrl = `https://huggingface.co/datasets/iamekansh/hackwave/resolve/main/${sanitizedPath}`;
+  
+  try {
+    const hfRes = await fetch(hfUrl);
+    
+    if (!hfRes.ok) {
+      return res.status(hfRes.status).json({ error: `Failed to fetch from Hugging Face: ${hfRes.statusText}` });
+    }
+    
+    const contentType = hfRes.headers.get('content-type') || 'application/octet-stream';
+    const arrayBuffer = await hfRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    hfCache.set(filePath, { contentType, buffer });
+    
+    res.set('Content-Type', contentType);
+    res.send(buffer);
+  } catch (err) {
+    console.error(`[proxy] Error fetching ${hfUrl}:`, err);
+    res.status(500).json({ error: 'Internal server error during HF proxy fetch' });
+  }
+});
 
 // health check
 app.get('/', (req, res) => {
