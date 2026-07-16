@@ -67,14 +67,14 @@ async function loadUserGameData(userId) {
     ]);
     const ownedCards = cardsRes.data ? cardsRes.data.map(r => r.card_id) : [];
     const savedDeck = (deckRes.data && deckRes.data.card_ids) ? deckRes.data.card_ids : [];
-    
+
     const upgrades = {};
     if (upgradesRes.data) {
       for (const row of upgradesRes.data) {
         upgrades[row.card_id] = { attack: row.attack_upgrades || 0, defense: row.defense_upgrades || 0 };
       }
     }
-    
+
     return { ownedCards, savedDeck, upgrades };
   } catch (err) {
     console.error('[game] Failed to load game data for', userId, err.message || err);
@@ -108,7 +108,7 @@ async function saveUsers(usersData) {
         })),
         { onConflict: 'id' }
       );
-      
+
       if (error) throw error;
     } catch (err) {
       console.error('[db] Supabase write error:', err.message || err);
@@ -137,7 +137,7 @@ async function incrementUserCredits(userId, amount) {
       user_id: userId,
       amount: amount
     });
-    
+
     if (error) throw error;
     // data should contain { credits, total_contributed }
     // supabase.rpc returns an array of objects when returning a table/record
@@ -425,7 +425,7 @@ function dispatchTask(io, task, idleNodeIds) {
 
   console.log(
     `[dispatch] Task ${taskId} (complexity ${complexity}) → ` +
-      `${chunks.size} chunk(s) across ${allocation.size} node(s)`,
+    `${chunks.size} chunk(s) across ${allocation.size} node(s)`,
   );
 }
 
@@ -449,7 +449,7 @@ function scanDeadlines(io) {
       meta.retries++;
       console.log(
         `[timeout] Chunk ${chunkId} on ${meta.socketId} overdue ` +
-          `(retry ${meta.retries}/${MAX_CHUNK_RETRIES})`,
+        `(retry ${meta.retries}/${MAX_CHUNK_RETRIES})`,
       );
 
       // exceeded retry limit → fail the whole task
@@ -510,7 +510,7 @@ function reassignChunk(taskId, chunkId, socketId, io) {
 
   console.log(
     `[reassign] Chunk ${chunkId} → ${socketId} ` +
-      `(deadline +${adaptiveTimeout(socketId, task.complexity)}ms)`,
+    `(deadline +${adaptiveTimeout(socketId, task.complexity)}ms)`,
   );
 }
 
@@ -643,7 +643,7 @@ async function tryReassemble(taskId, io) {
     const { chunkId, socketId, userId, username, startRow, rowCount, result } = item;
     const credits = rowCount;
     const node = nodes.get(socketId);
-    
+
     let totalCredits = credits;
     if (node) {
       node.credits = (node.credits || 0) + credits;
@@ -684,9 +684,9 @@ async function tryReassemble(taskId, io) {
 
   console.log(
     `[complete] Task ${taskId} reassembled in ${elapsed}ms — ` +
-      contributions
-        .map((c) => `${c.socketId.slice(0, 6)}… ${c.rowCount}r/${c.computeMs}ms/+${c.creditsAwarded}cr`)
-        .join(', '),
+    contributions
+      .map((c) => `${c.socketId.slice(0, 6)}… ${c.rowCount}r/${c.computeMs}ms/+${c.creditsAwarded}cr`)
+      .join(', '),
   );
 
   // broadcast the completed task to all clients
@@ -722,24 +722,24 @@ async function tryReassemble(taskId, io) {
 function abortPipelineSession(sessionId, io, reason) {
   const session = activePipelines.get(sessionId);
   if (!session) return;
-  
+
   for (const nodeId of session.activeNodes) {
     markIdle(nodeId, io);
   }
-  
+
   const clientSocket = io.sockets.sockets.get(session.clientSocketId);
   if (clientSocket) {
     clientSocket.emit('generation_error', { sessionId, reason });
   }
   io.emit('pipeline_error', { sessionId, reason });
-  
+
   activePipelines.delete(sessionId);
 }
 
 function finishPipelineSession(sessionId, io) {
   const session = activePipelines.get(sessionId);
   if (!session) return;
-  
+
   for (const nodeId of session.activeNodes) {
     markIdle(nodeId, io);
   }
@@ -762,7 +762,7 @@ function setupSocketHandler(io) {
       supportsInference: false
     });
 
-    socket.on('dev_auth', () => { const n = nodes.get(socket.id); if(n) n.status = 'idle'; });
+    socket.on('dev_auth', () => { const n = nodes.get(socket.id); if (n) n.status = 'idle'; });
 
     socket.on('register_worker', ({ supportsInference }) => {
       const node = nodes.get(socket.id);
@@ -783,23 +783,23 @@ function setupSocketHandler(io) {
           const { OAuth2Client } = require('google-auth-library');
           const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
           const client = new OAuth2Client(GOOGLE_CLIENT_ID);
-          
+
           const ticket = await client.verifyIdToken({
-              idToken: token,
-              audience: GOOGLE_CLIENT_ID,
+            idToken: token,
+            audience: GOOGLE_CLIENT_ID,
           });
           const payload = ticket.getPayload();
-          
+
           if (payload) {
             const userId = payload.sub; // Google ID
             const googleEmail = payload.email;
             const googleName = payload.name;
-            
+
             const usersList = await loadUsers();
-            
+
             // 1. Look up user by Google ID
             let dbUser = usersList.find(u => u.id === userId);
-            
+
             // 2. Resolve User ID Migration: If not found by Google ID, match by email/username prefix
             if (!dbUser) {
               dbUser = usersList.find(u => {
@@ -810,7 +810,7 @@ function setupSocketHandler(io) {
                   (googleName && uname === googleName.toLowerCase())
                 );
               });
-              
+
               if (dbUser) {
                 console.log(`[migration] Linked existing account '${dbUser.username}' (credits: ${dbUser.credits}) to Google ID ${userId}`);
                 dbUser.id = userId; // Update ID to Google ID
@@ -853,7 +853,7 @@ function setupSocketHandler(io) {
         node.username = user.username;
         node.credits = user.credits;
         node.status = 'idle'; // Upgraded from unauthenticated
-        
+
         drainRequeued(io);
         tryDispatchNext(io);
 
@@ -881,7 +881,7 @@ function setupSocketHandler(io) {
           upgrades: {},
         });
       }
-      
+
       console.log(`[node+] ${socket.id} (${user ? user.username : 'anonymous'}) connected (${nodes.size} total)`);
       io.emit('node_count', nodes.size);
     })();
@@ -1122,7 +1122,7 @@ function setupSocketHandler(io) {
           const { error } = await supabase
             .from('user_decks')
             .upsert({ user_id: node.userId, card_ids: cardIds, updated_at: new Date().toISOString() },
-                    { onConflict: 'user_id' });
+              { onConflict: 'user_id' });
           if (error) {
             console.error('[deck] Failed to save deck:', error.message);
             socket.emit('deck:save_result', { success: false, reason: 'server_error' });
@@ -1179,7 +1179,7 @@ function setupSocketHandler(io) {
             defense: baseCard.defense + upg.defense
           };
         }).filter(Boolean);
-        
+
         if (playerDeck.length !== DECK_SIZE) {
           socket.emit('battle:result_confirmed', { success: false, reason: 'invalid_deck_cards' });
           return;
@@ -1312,7 +1312,7 @@ function setupSocketHandler(io) {
           // Upsert upgrade
           const newAttack = statType === 'attack' ? currentAttack + 1 : currentAttack;
           const newDefense = statType === 'defense' ? currentDefense + 1 : currentDefense;
-          
+
           await supabase.from('user_card_upgrades').upsert({
             user_id: node.userId,
             card_id: cardId,
@@ -1361,7 +1361,7 @@ function setupSocketHandler(io) {
         socket.emit('generation_error', { sessionId, reason: 'No idle nodes available for inference pipeline.' });
         return;
       }
-      
+
       const stages = planStages(LLM_LAYERS, idleIds.length);
       const assignedNodes = [];
       for (let i = 0; i < stages.length; i++) {
@@ -1370,16 +1370,16 @@ function setupSocketHandler(io) {
         assignedNodes.push(nodeId);
         stages[i].socketId = nodeId;
       }
-      
+
       let allResponded = true;
       try {
         await Promise.all(assignedNodes.map(nodeId => {
           return new Promise((resolve, reject) => {
             const targetSocket = io.sockets.sockets.get(nodeId);
             if (!targetSocket) return reject(new Error('Node missing'));
-            
+
             const timer = setTimeout(() => reject(new Error('Ping timeout')), 3000);
-            
+
             targetSocket.emit('pipeline:ping', {}, () => {
               clearTimeout(timer);
               resolve();
@@ -1389,7 +1389,7 @@ function setupSocketHandler(io) {
       } catch (err) {
         allResponded = false;
       }
-      
+
       if (!allResponded) {
         assignedNodes.forEach(nodeId => markIdle(nodeId, io));
         socket.emit('generation_error', { sessionId, reason: 'Ping failed for pipeline nodes. Aborting.' });
@@ -1406,7 +1406,7 @@ function setupSocketHandler(io) {
         socket.emit('generation_error', { sessionId, reason: 'Tokenizer unavailable on server.' });
         return;
       }
-      
+
       activePipelines.set(sessionId, {
         clientSocketId: socket.id,
         stages,
@@ -1414,10 +1414,10 @@ function setupSocketHandler(io) {
         promptTokens: tokenIds,
         posOff: 0
       });
-      
+
       // Global broadcast for UI visualization
       io.emit('pipeline_plan', { sessionId, stages });
-      
+
       stages.forEach(stage => {
         const targetSocket = io.sockets.sockets.get(stage.socketId);
         if (targetSocket) {
@@ -1429,7 +1429,7 @@ function setupSocketHandler(io) {
           });
         }
       });
-      
+
       // Wait for all nodes to load their model shards
       let allReady = true;
       try {
@@ -1437,12 +1437,12 @@ function setupSocketHandler(io) {
           return new Promise((resolve, reject) => {
             const targetSocket = io.sockets.sockets.get(nodeId);
             if (!targetSocket) return reject(new Error('Node missing'));
-            
+
             const timer = setTimeout(() => {
               targetSocket.removeAllListeners('stage_ready'); // clean up this promise's listener if timeout
               reject(new Error('Shard loading timeout'));
-            }, 30000); // 30 seconds
-            
+            }, 240000); // 30 seconds
+
             const onStageReady = (data) => {
               if (data.sessionId === sessionId) {
                 clearTimeout(timer);
@@ -1450,7 +1450,7 @@ function setupSocketHandler(io) {
                 resolve();
               }
             };
-            
+
             targetSocket.on('stage_ready', onStageReady);
           });
         }));
@@ -1458,12 +1458,12 @@ function setupSocketHandler(io) {
         console.error(`[pipeline] Stage ready wait failed:`, err.message);
         allReady = false;
       }
-      
+
       if (!allReady) {
         abortPipelineSession(sessionId, io, 'Shard loading timed out for one or more pipeline nodes.');
         return;
       }
-      
+
       const stage0Socket = io.sockets.sockets.get(stages[0].socketId);
       if (stage0Socket) {
         stage0Socket.emit('forward_request', {
@@ -1480,9 +1480,9 @@ function setupSocketHandler(io) {
     socket.on('forward_response', ({ sessionId, stageIndex, hiddenStates, tokenId }) => {
       const session = activePipelines.get(sessionId);
       if (!session) return;
-      
+
       const isLastStage = stageIndex === session.stages.length - 1;
-      
+
       if (!isLastStage) {
         const nextStage = session.stages[stageIndex + 1];
         const nextSocket = io.sockets.sockets.get(nextStage.socketId);
@@ -1505,24 +1505,24 @@ function setupSocketHandler(io) {
           abortPipelineSession(sessionId, io, 'Tokenizer unavailable on server.');
           return;
         }
-        
+
         let tokenText = '';
         if (tokenId !== undefined) {
           tokenText = tokenizer.decode([tokenId]);
         }
-        
+
         const clientSocket = io.sockets.sockets.get(session.clientSocketId);
         if (clientSocket) {
           clientSocket.emit('final_token', { sessionId, tokenId, tokenText });
         }
-        
+
         if (tokenId === tokenizer.eosId) {
           io.emit('pipeline_end', { sessionId });
           finishPipelineSession(sessionId, io);
         } else {
           const tokensSentSoFar = session.posOff === 0 ? session.promptTokens.length : 1;
           session.posOff += tokensSentSoFar;
-          
+
           const stage0 = session.stages[0];
           const stage0Socket = io.sockets.sockets.get(stage0.socketId);
           if (stage0Socket) {
@@ -1594,10 +1594,10 @@ async function getLeaderboard() {
   const usersList = await loadUsers();
   // Filter out users with 0 total_contributed to keep leaderboard clean
   const activeUsers = usersList.filter(u => (u.total_contributed || 0) > 0);
-  
+
   // Sort descending by total_contributed
   activeUsers.sort((a, b) => (b.total_contributed || 0) - (a.total_contributed || 0));
-  
+
   // Return top 10
   return activeUsers.slice(0, 10).map((u, index) => ({
     rank: index + 1,
@@ -1610,10 +1610,10 @@ async function getForgemasterLeaderboard() {
   const usersList = await loadUsers();
   // Filter out users with 0 trophies
   const activePlayers = usersList.filter(u => (u.trophies || 0) > 0);
-  
+
   // Sort descending by trophies
   activePlayers.sort((a, b) => (b.trophies || 0) - (a.trophies || 0));
-  
+
   // Return top 10
   return activePlayers.slice(0, 10).map((u, index) => ({
     rank: index + 1,
