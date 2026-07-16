@@ -76,7 +76,15 @@ self.onmessage = async function (e) {
 
       const manifestRes = await fetch(`${import.meta.env.VITE_SERVER_URL || 'http://localhost:3001'}/models/manifest.json`);
       const rawManifest = await manifestRes.json();
-      const manifest = Array.isArray(rawManifest) ? rawManifest : Object.values(rawManifest);
+      const files = rawManifest.files;  // array of { filename, tensors, size_bytes, ... }
+
+      // Helper: find a file entry by filename and return its tensors array
+      const getTensors = (fname) => {
+        const entry = files.find(f => f.filename === fname);
+        if (!entry) throw new Error(`File not found in manifest: ${fname}`);
+        console.log(`[Worker] Loaded ${fname}: ${entry.tensors.length} tensors`);
+        return entry.tensors;
+      };
 
       const sessionData = {
         device,
@@ -88,29 +96,29 @@ self.onmessage = async function (e) {
       };
 
       if (role === 'embedding' || role === 'all') {
-        const embedEntries = manifest.filter(e => e.file === 'embedding.bin' || (e.name && e.name.includes('embed_tokens')));
+        const embedTensors = getTensors('embedding.bin');
         const embedBuf = await readBin('embedding.bin');
-        sessionData.embedding = loadEmbeddingWeights(device, embedBuf, embedEntries);
+        sessionData.embedding = loadEmbeddingWeights(device, embedBuf, embedTensors);
       }
 
       for (let i = layerRange[0]; i <= layerRange[1]; i++) {
         const layerFile = `layers/layer_${i.toString().padStart(2, '0')}.bin`;
-        const lEntries = manifest.filter(e => e.file === layerFile || (e.name && e.name.includes(`layers.${i}.`)));
+        const layerTensors = getTensors(layerFile);
         const lBuf = await readBin(layerFile);
         
         // Initial empty kvCache for this layer
         const kvCache = { length: 0 };
 
         sessionData.layers.push({
-          weights: loadLayerWeights(device, lBuf, lEntries),
+          weights: loadLayerWeights(device, lBuf, layerTensors),
           kvCache
         });
       }
 
       if (role === 'lm_head' || role === 'all') {
-        const finalEntries = manifest.filter(e => e.file === 'final_head.bin' || (e.name && (e.name.includes('lm_head') || e.name === 'model.norm.weight')));
+        const finalTensors = getTensors('final_head.bin');
         const finalBuf = await readBin('final_head.bin');
-        sessionData.finalHead = loadFinalHeadWeights(device, finalBuf, finalEntries);
+        sessionData.finalHead = loadFinalHeadWeights(device, finalBuf, finalTensors);
       }
 
       pipelineSessions.set(sessionId, sessionData);
