@@ -1430,6 +1430,40 @@ function setupSocketHandler(io) {
         }
       });
       
+      // Wait for all nodes to load their model shards
+      let allReady = true;
+      try {
+        await Promise.all(assignedNodes.map(nodeId => {
+          return new Promise((resolve, reject) => {
+            const targetSocket = io.sockets.sockets.get(nodeId);
+            if (!targetSocket) return reject(new Error('Node missing'));
+            
+            const timer = setTimeout(() => {
+              targetSocket.removeAllListeners('stage_ready'); // clean up this promise's listener if timeout
+              reject(new Error('Shard loading timeout'));
+            }, 30000); // 30 seconds
+            
+            const onStageReady = (data) => {
+              if (data.sessionId === sessionId) {
+                clearTimeout(timer);
+                targetSocket.removeListener('stage_ready', onStageReady);
+                resolve();
+              }
+            };
+            
+            targetSocket.on('stage_ready', onStageReady);
+          });
+        }));
+      } catch (err) {
+        console.error(`[pipeline] Stage ready wait failed:`, err.message);
+        allReady = false;
+      }
+      
+      if (!allReady) {
+        abortPipelineSession(sessionId, io, 'Shard loading timed out for one or more pipeline nodes.');
+        return;
+      }
+      
       const stage0Socket = io.sockets.sockets.get(stages[0].socketId);
       if (stage0Socket) {
         stage0Socket.emit('forward_request', {
