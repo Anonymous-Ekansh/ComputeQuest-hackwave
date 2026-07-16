@@ -723,6 +723,11 @@ function abortPipelineSession(sessionId, io, reason) {
   const session = activePipelines.get(sessionId);
   if (!session) return;
 
+  if (session.stallTimer) {
+    clearTimeout(session.stallTimer);
+    session.stallTimer = null;
+  }
+
   for (const nodeId of session.activeNodes) {
     markIdle(nodeId, io);
   }
@@ -740,10 +745,29 @@ function finishPipelineSession(sessionId, io) {
   const session = activePipelines.get(sessionId);
   if (!session) return;
 
+  if (session.stallTimer) {
+    clearTimeout(session.stallTimer);
+    session.stallTimer = null;
+  }
+
   for (const nodeId of session.activeNodes) {
     markIdle(nodeId, io);
   }
   activePipelines.delete(sessionId);
+}
+
+function resetStallTimer(sessionId, stageIndex, io) {
+  const session = activePipelines.get(sessionId);
+  if (!session) return;
+
+  if (session.stallTimer) {
+    clearTimeout(session.stallTimer);
+  }
+  session.expectedStageIndex = stageIndex;
+  session.stallTimer = setTimeout(() => {
+    console.warn(`[pipeline] Session ${sessionId} stalled at stage ${stageIndex}`);
+    abortPipelineSession(sessionId, io, 'A pipeline stage stalled — aborting.');
+  }, 60000); // 60 seconds
 }
 
 // ── socket setup ─────────────────────────────────────────────────────────────
@@ -1412,7 +1436,9 @@ function setupSocketHandler(io) {
         stages,
         activeNodes: new Set(assignedNodes),
         promptTokens: tokenIds,
-        posOff: 0
+        posOff: 0,
+        stallTimer: null,
+        expectedStageIndex: 0
       });
 
       // Global broadcast for UI visualization
@@ -1466,6 +1492,7 @@ function setupSocketHandler(io) {
 
       const stage0Socket = io.sockets.sockets.get(stages[0].socketId);
       if (stage0Socket) {
+        resetStallTimer(sessionId, 0, io);
         stage0Socket.emit('forward_request', {
           sessionId,
           stageIndex: 0,
@@ -1481,12 +1508,23 @@ function setupSocketHandler(io) {
       const session = activePipelines.get(sessionId);
       if (!session) return;
 
+      if (session.expectedStageIndex !== undefined && stageIndex !== session.expectedStageIndex) {
+        console.warn(`[pipeline] Unexpected stage response. Expected ${session.expectedStageIndex}, got ${stageIndex}`);
+        return; 
+      }
+      
+      if (session.stallTimer) {
+        clearTimeout(session.stallTimer);
+        session.stallTimer = null;
+      }
+
       const isLastStage = stageIndex === session.stages.length - 1;
 
       if (!isLastStage) {
         const nextStage = session.stages[stageIndex + 1];
         const nextSocket = io.sockets.sockets.get(nextStage.socketId);
         if (nextSocket) {
+          resetStallTimer(sessionId, nextStage.stageIndex, io);
           nextSocket.emit('forward_request', {
             sessionId,
             stageIndex: nextStage.stageIndex,
@@ -1526,6 +1564,7 @@ function setupSocketHandler(io) {
           const stage0 = session.stages[0];
           const stage0Socket = io.sockets.sockets.get(stage0.socketId);
           if (stage0Socket) {
+            resetStallTimer(sessionId, 0, io);
             stage0Socket.emit('forward_request', {
               sessionId,
               stageIndex: 0,
