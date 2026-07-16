@@ -749,93 +749,24 @@ function finishPipelineSession(sessionId, io) {
 // ── socket setup ─────────────────────────────────────────────────────────────
 
 function setupSocketHandler(io) {
-  io.on('connection', async (socket) => {
-    // ── authenticate socket handshake ──
-    let user = null;
-    if (socket.handshake.auth && socket.handshake.auth.token) {
-      const token = socket.handshake.auth.token;
-      try {
-        const { OAuth2Client } = require('google-auth-library');
-        const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-        const client = new OAuth2Client(GOOGLE_CLIENT_ID);
-        
-        const ticket = await client.verifyIdToken({
-            idToken: token,
-            audience: GOOGLE_CLIENT_ID,
-        });
-        const payload = ticket.getPayload();
-        
-        if (payload) {
-          const userId = payload.sub; // Google ID
-          const googleEmail = payload.email;
-          const googleName = payload.name;
-          
-          const usersList = await loadUsers();
-          
-          // 1. Look up user by Google ID
-          let dbUser = usersList.find(u => u.id === userId);
-          
-          // 2. Resolve User ID Migration: If not found by Google ID, match by email/username prefix
-          if (!dbUser) {
-            dbUser = usersList.find(u => {
-              if (!u.username) return false;
-              const uname = u.username.toLowerCase();
-              return (
-                (googleEmail && (uname === googleEmail.toLowerCase() || googleEmail.toLowerCase().startsWith(uname + '@'))) ||
-                (googleName && uname === googleName.toLowerCase())
-              );
-            });
-            
-            if (dbUser) {
-              console.log(`[migration] Linked existing account '${dbUser.username}' (credits: ${dbUser.credits}) to Google ID ${userId}`);
-              dbUser.id = userId; // Update ID to Google ID
-              // Sync username with Google profile
-              dbUser.username = googleName || googleEmail || dbUser.username;
-              await saveUsers(usersList);
-            }
-          }
-
-          // 3. Fallback: Create new user if no match found
-          if (!dbUser) {
-            dbUser = {
-              id: userId,
-              username: googleName || googleEmail || 'Google User',
-              credits: 5000 // 5000 raw credits = 50 crystals
-            };
-            usersList.push(dbUser);
-            await saveUsers(usersList);
-            console.log(`[auth] Created new Google User ${dbUser.username} with ID ${userId}`);
-          }
-
-          user = {
-            id: dbUser.id,
-            username: dbUser.username,
-            credits: dbUser.credits || 0,
-            can_upgrade: dbUser.can_upgrade || false
-          };
-          console.log(`[auth] Google User ${dbUser.username} connected on socket ${socket.id}`);
-        }
-      } catch (err) {
-        console.error('[auth] Google JWT verification failed:', err.message);
-      }
-    }
-
-    // register this node
-    socket.on('dev_auth', () => { const n = nodes.get(socket.id); if(n) n.status = 'idle'; });
+  io.on('connection', (socket) => {
+    // ── 1. Synchronous Initial Setup ──
     nodes.set(socket.id, {
       id: socket.id,
-      userId: user ? user.id : null,
-      username: user ? user.username : 'Anonymous Node',
+      userId: null,
+      username: 'Anonymous Node',
       connectedAt: new Date(),
       tasksCompleted: 0,
-      credits: user ? user.credits : 0,
-      status: user ? 'idle' : 'unauthenticated',
+      credits: 0,
+      status: 'unauthenticated',
       supportsInference: false
     });
 
+    socket.on('dev_auth', () => { const n = nodes.get(socket.id); if(n) n.status = 'idle'; });
+
     socket.on('register_worker', ({ supportsInference }) => {
       const node = nodes.get(socket.id);
-      if (node && node.status !== 'unauthenticated') {
+      if (node) {
         node.supportsInference = supportsInference;
         node.status = 'idle';
         drainRequeued(io);
@@ -843,37 +774,117 @@ function setupSocketHandler(io) {
       }
     });
 
-    console.log(`[node+] ${socket.id} (${user ? user.username : 'anonymous'}) connected (${nodes.size} total)`);
+    // ── 2. Asynchronous Authentication ──
+    (async () => {
+      let user = null;
+      if (socket.handshake.auth && socket.handshake.auth.token) {
+        const token = socket.handshake.auth.token;
+        try {
+          const { OAuth2Client } = require('google-auth-library');
+          const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+          const client = new OAuth2Client(GOOGLE_CLIENT_ID);
+          
+          const ticket = await client.verifyIdToken({
+              idToken: token,
+              audience: GOOGLE_CLIENT_ID,
+          });
+          const payload = ticket.getPayload();
+          
+          if (payload) {
+            const userId = payload.sub; // Google ID
+            const googleEmail = payload.email;
+            const googleName = payload.name;
+            
+            const usersList = await loadUsers();
+            
+            // 1. Look up user by Google ID
+            let dbUser = usersList.find(u => u.id === userId);
+            
+            // 2. Resolve User ID Migration: If not found by Google ID, match by email/username prefix
+            if (!dbUser) {
+              dbUser = usersList.find(u => {
+                if (!u.username) return false;
+                const uname = u.username.toLowerCase();
+                return (
+                  (googleEmail && (uname === googleEmail.toLowerCase() || googleEmail.toLowerCase().startsWith(uname + '@'))) ||
+                  (googleName && uname === googleName.toLowerCase())
+                );
+              });
+              
+              if (dbUser) {
+                console.log(`[migration] Linked existing account '${dbUser.username}' (credits: ${dbUser.credits}) to Google ID ${userId}`);
+                dbUser.id = userId; // Update ID to Google ID
+                // Sync username with Google profile
+                dbUser.username = googleName || googleEmail || dbUser.username;
+                await saveUsers(usersList);
+              }
+            }
 
-    // tell everyone the updated count
-    io.emit('node_count', nodes.size);
+            // 3. Fallback: Create new user if no match found
+            if (!dbUser) {
+              dbUser = {
+                id: userId,
+                username: googleName || googleEmail || 'Google User',
+                credits: 5000 // 5000 raw credits = 50 crystals
+              };
+              usersList.push(dbUser);
+              await saveUsers(usersList);
+              console.log(`[auth] Created new Google User ${dbUser.username} with ID ${userId}`);
+            }
 
-    // Send user info back to connection (including game data for authenticated users)
-    if (user) {
-      const gameData = await loadUserGameData(user.id);
-      const trophies = await loadUserTrophies(user.id);
-      socket.emit('user_info', {
-        username: user.username,
-        credits: user.credits,
-        isAuthenticated: true,
-        isEligibleForUpgrade: true,
-        trophies,
-        ownedCards: gameData.ownedCards,
-        savedDeck: gameData.savedDeck,
-        upgrades: gameData.upgrades,
-      });
-    } else {
-      socket.emit('user_info', {
-        username: 'Anonymous Node',
-        credits: 0,
-        isAuthenticated: false,
-        isEligibleForUpgrade: false,
-      });
-    }
+            user = {
+              id: dbUser.id,
+              username: dbUser.username,
+              credits: dbUser.credits || 0,
+              can_upgrade: dbUser.can_upgrade || false
+            };
+            console.log(`[auth] Google User ${dbUser.username} connected on socket ${socket.id}`);
+          }
+        } catch (err) {
+          console.error('[auth] Google JWT verification failed:', err.message);
+        }
+      }
 
-    // a new idle node just appeared — maybe we can dispatch work now
-    drainRequeued(io);
-    tryDispatchNext(io);
+      const node = nodes.get(socket.id);
+      if (!node) return; // Socket disconnected before auth finished
+
+      if (user) {
+        node.userId = user.id;
+        node.username = user.username;
+        node.credits = user.credits;
+        node.status = 'idle'; // Upgraded from unauthenticated
+        
+        drainRequeued(io);
+        tryDispatchNext(io);
+
+        const gameData = await loadUserGameData(user.id);
+        const trophies = await loadUserTrophies(user.id);
+        socket.emit('user_info', {
+          username: user.username,
+          credits: user.credits,
+          isAuthenticated: true,
+          isEligibleForUpgrade: true,
+          trophies,
+          ownedCards: gameData.ownedCards,
+          savedDeck: gameData.savedDeck,
+          upgrades: gameData.upgrades,
+        });
+      } else {
+        socket.emit('user_info', {
+          username: 'Anonymous Node',
+          credits: 0,
+          isAuthenticated: false,
+          isEligibleForUpgrade: false,
+          trophies: [],
+          ownedCards: [],
+          savedDeck: [],
+          upgrades: {},
+        });
+      }
+      
+      console.log(`[node+] ${socket.id} (${user ? user.username : 'anonymous'}) connected (${nodes.size} total)`);
+      io.emit('node_count', nodes.size);
+    })();
 
     // handle compute results coming back from a browser
     socket.on('chunk_result', (data) => {
