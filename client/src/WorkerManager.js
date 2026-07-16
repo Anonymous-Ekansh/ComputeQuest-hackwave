@@ -34,6 +34,9 @@ export default class WorkerManager {
     /** @type {((result: object) => void) | null} */
     this._resultCallback = null;
 
+    /** @type {((msg: object) => void) | null} */
+    this._pipelineCallback = null;
+
     // ── create the persistent worker ──
     this._spawnWorker();
 
@@ -49,6 +52,26 @@ export default class WorkerManager {
    */
   onResult(fn) {
     this._resultCallback = fn;
+  }
+
+  /**
+   * Register a callback for pipeline-related worker messages
+   * (stage_ready, forward_response, stage_error).
+   * @param {(msg: object) => void} fn
+   */
+  onPipelineMessage(fn) {
+    this._pipelineCallback = fn;
+  }
+
+  /**
+   * Post a pipeline message directly to the worker (stage_assign, forward_request)
+   * without going through the chunk queue or affecting busy/idle state.
+   * @param {object} payload
+   */
+  postPipelineMessage(payload) {
+    if (this._worker) {
+      this._worker.postMessage(payload);
+    }
   }
 
   /**
@@ -109,10 +132,22 @@ export default class WorkerManager {
 
   /** @private Handle a successful result from the worker. */
   _onMessage(e) {
+    const data = e.data;
+    const pipelineTypes = ['stage_ready', 'forward_response', 'stage_error'];
+
+    if (data && data.type && pipelineTypes.includes(data.type)) {
+      // Pipeline message — don't touch chunk state
+      if (this._pipelineCallback) {
+        this._pipelineCallback(data);
+      }
+      return;
+    }
+
+    // MATRIX_MULTIPLY chunk result — original path
     this._state = 'idle';
 
     if (this._resultCallback) {
-      this._resultCallback(e.data);
+      this._resultCallback(data);
     }
 
     this._drainQueue();

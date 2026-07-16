@@ -1479,6 +1479,11 @@ function setupSocketHandler(io) {
       }
     });
 
+    socket.on('pipeline_client_error', ({ sessionId, reason }) => {
+      console.error(`[pipeline] Client error from ${socket.id}: ${reason}`);
+      abortPipelineSession(sessionId, io, reason);
+    });
+
     socket.on('disconnect', () => {
       // remove from pool FIRST so it can't be picked as a reassignment target
       nodes.delete(socket.id);

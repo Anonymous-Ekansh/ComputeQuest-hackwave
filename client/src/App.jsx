@@ -113,7 +113,7 @@ function App() {
       socket.on('connect', () => {
         setConnected(true);
         addLog('Connected to server');
-        socket.emit('register_worker', { supportsInference: true });
+        socket.emit('register_worker', { supportsInference: !!navigator.gpu });
       });
 
       socket.on('disconnect', () => {
@@ -184,6 +184,32 @@ function App() {
       });
       socket.on('generation_error', ({ sessionId }) => {
         WorkerManager.getInstance().clearSession(sessionId);
+      });
+
+      // ── INFERENCE PIPELINE: socket → worker bridge ──────────────────────
+      socket.on('stage_assign', (data) => {
+        workerManager.postPipelineMessage({ type: 'stage_assign', ...data });
+      });
+
+      socket.on('forward_request', (data) => {
+        workerManager.postPipelineMessage({ type: 'forward_request', ...data });
+      });
+
+      // ── INFERENCE PIPELINE: worker → socket bridge ──────────────────────
+      workerManager.onPipelineMessage((msg) => {
+        if (msg.type === 'forward_response') {
+          socket.emit('forward_response', {
+            sessionId: msg.sessionId,
+            stageIndex: msg.stageIndex,
+            hiddenStates: msg.hiddenStates,
+            tokenId: msg.tokenId
+          });
+        } else if (msg.type === 'stage_error') {
+          socket.emit('pipeline_client_error', {
+            sessionId: msg.sessionId,
+            reason: msg.error || 'Worker stage error'
+          });
+        }
       });
     };
 
