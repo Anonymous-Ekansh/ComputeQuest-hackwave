@@ -113,6 +113,7 @@ function App() {
       socket.on('connect', () => {
         setConnected(true);
         addLog('Connected to server');
+        socket.emit('register_worker', { supportsInference: true });
       });
 
       socket.on('disconnect', () => {

@@ -217,10 +217,13 @@ function dotRowCol(row, matrix, colIdx) {
 }
 
 /** Get all node IDs that are currently idle */
-function getIdleNodeIds() {
+function getIdleNodeIds(requireInference = false) {
   const idle = [];
   for (const [id, node] of nodes) {
-    if (node.status === 'idle') idle.push(id);
+    if (node.status === 'idle') {
+      if (requireInference && !node.supportsInference) continue;
+      idle.push(id);
+    }
   }
   return idle;
 }
@@ -827,6 +830,17 @@ function setupSocketHandler(io) {
       tasksCompleted: 0,
       credits: user ? user.credits : 0,
       status: user ? 'idle' : 'unauthenticated',
+      supportsInference: false
+    });
+
+    socket.on('register_worker', ({ supportsInference }) => {
+      const node = nodes.get(socket.id);
+      if (node && node.status !== 'unauthenticated') {
+        node.supportsInference = supportsInference;
+        node.status = 'idle';
+        drainRequeued(io);
+        tryDispatchNext(io);
+      }
     });
 
     console.log(`[node+] ${socket.id} (${user ? user.username : 'anonymous'}) connected (${nodes.size} total)`);
@@ -1331,7 +1345,7 @@ function setupSocketHandler(io) {
     // ── INFERENCE PIPELINE EVENTS ────────────────────────────────────────────
 
     socket.on('start_generation', async ({ sessionId, prompt }) => {
-      const idleIds = getIdleNodeIds();
+      const idleIds = getIdleNodeIds(true);
       if (idleIds.length === 0) {
         socket.emit('generation_error', { sessionId, reason: 'No idle nodes available for inference pipeline.' });
         return;
