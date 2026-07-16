@@ -1384,10 +1384,17 @@ function setupSocketHandler(io) {
         socket.emit('generation_error', { sessionId, reason: 'Ping failed for pipeline nodes. Aborting.' });
         return;
       }
-      
-      const tokenizer = getTokenizer();
-      const chatPrompt = tokenizer.applyChatTemplate(prompt);
-      const tokenIds = tokenizer.encode(chatPrompt);
+      let tokenizer, chatPrompt, tokenIds;
+      try {
+        tokenizer = getTokenizer();
+        chatPrompt = tokenizer.applyChatTemplate(prompt);
+        tokenIds = tokenizer.encode(chatPrompt);
+      } catch (err) {
+        console.error('[pipeline] Error initializing tokenizer:', err);
+        assignedNodes.forEach(nodeId => markIdle(nodeId, io));
+        socket.emit('generation_error', { sessionId, reason: 'Tokenizer unavailable on server.' });
+        return;
+      }
       
       activePipelines.set(sessionId, {
         clientSocketId: socket.id,
@@ -1445,7 +1452,15 @@ function setupSocketHandler(io) {
           io.emit('pipeline_progress', { sessionId, stageIndex: nextStage.stageIndex });
         }
       } else {
-        const tokenizer = getTokenizer();
+        let tokenizer;
+        try {
+          tokenizer = getTokenizer();
+        } catch (err) {
+          console.error('[pipeline] Tokenizer unavailable during decoding:', err);
+          abortPipelineSession(sessionId, io, 'Tokenizer unavailable on server.');
+          return;
+        }
+        
         let tokenText = '';
         if (tokenId !== undefined) {
           tokenText = tokenizer.decode([tokenId]);
