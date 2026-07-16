@@ -4,6 +4,8 @@ import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import WorkerManager from './WorkerManager';
 import Leaderboard from './Leaderboard';
 import TheForge from './forge/TheForge';
+import Dashboard from './components/Dashboard';
+import ChatPanel from './components/ChatPanel';
 import { runDeviceBenchmark } from './benchmark';
 import './App.css';
 
@@ -168,6 +170,13 @@ function App() {
         addLog(`Task failed: ${data.reason}`);
         setTaskProgress(null); // clear progress
       });
+
+      socket.on('pipeline_end', ({ sessionId }) => {
+        WorkerManager.getInstance().clearSession(sessionId);
+      });
+      socket.on('generation_error', ({ sessionId }) => {
+        WorkerManager.getInstance().clearSession(sessionId);
+      });
     };
 
     initSocket();
@@ -272,6 +281,9 @@ function App() {
             </div>
           )}
 
+          {/* Global Inference Pipeline Visualization */}
+          <Dashboard socket={socketRef.current} />
+
           {/* Leaderboard */}
           <Leaderboard />
 
@@ -288,13 +300,20 @@ function App() {
         </div>
       </aside>
 
-      {/* ── Right Panel (The Forge) ── */}
-      <main className="main-panel">
-        <TheForge
-          socket={socketRef.current}
-          userInfo={userInfo}
-          isAuthenticated={userInfo.isAuthenticated}
-        />
+      {/* ── Right Panel (Main Content) ── */}
+      <main className="main-panel" style={{ display: 'flex', flexDirection: 'row', width: '100%' }}>
+        <div style={{ flex: 1, position: 'relative' }}>
+          <TheForge
+            socket={socketRef.current}
+            userInfo={userInfo}
+            isAuthenticated={userInfo.isAuthenticated}
+          />
+        </div>
+        
+        {/* HackWave AI Chat Panel */}
+        <div style={{ width: '450px', flexShrink: 0, height: '100%' }}>
+          <ChatPanel socket={socketRef.current} />
+        </div>
       </main>
     </div>
   );

@@ -728,6 +728,7 @@ function abortPipelineSession(sessionId, io, reason) {
   if (clientSocket) {
     clientSocket.emit('generation_error', { sessionId, reason });
   }
+  io.emit('pipeline_error', { sessionId, reason });
   
   activePipelines.delete(sessionId);
 }
@@ -1382,6 +1383,9 @@ function setupSocketHandler(io) {
         posOff: 0
       });
       
+      // Global broadcast for UI visualization
+      io.emit('pipeline_plan', { sessionId, stages });
+      
       stages.forEach(stage => {
         const targetSocket = io.sockets.sockets.get(stage.socketId);
         if (targetSocket) {
@@ -1403,6 +1407,7 @@ function setupSocketHandler(io) {
           positionId: 0,
           tokenIndex: tokenIds
         });
+        io.emit('pipeline_progress', { sessionId, stageIndex: 0 });
       }
     });
 
@@ -1423,6 +1428,7 @@ function setupSocketHandler(io) {
             positionId: session.posOff,
             tokenIndex: null
           });
+          io.emit('pipeline_progress', { sessionId, stageIndex: nextStage.stageIndex });
         }
       } else {
         const tokenizer = getTokenizer();
@@ -1437,6 +1443,7 @@ function setupSocketHandler(io) {
         }
         
         if (tokenId === tokenizer.eosId) {
+          io.emit('pipeline_end', { sessionId });
           finishPipelineSession(sessionId, io);
         } else {
           const tokensSentSoFar = session.posOff === 0 ? session.promptTokens.length : 1;
@@ -1452,6 +1459,7 @@ function setupSocketHandler(io) {
               positionId: session.posOff,
               tokenIndex: [tokenId]
             });
+            io.emit('pipeline_progress', { sessionId, stageIndex: 0 });
           }
         }
       }

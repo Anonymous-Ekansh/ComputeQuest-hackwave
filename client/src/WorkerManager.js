@@ -64,6 +64,17 @@ export default class WorkerManager {
     this._dispatch(payload);
   }
 
+  /**
+   * Directly send a session clear command to free VRAM for a given pipeline session.
+   * Bypasses the standard queue because it's purely a cleanup signal.
+   * @param {string} sessionId
+   */
+  clearSession(sessionId) {
+    if (this._worker) {
+      this._worker.postMessage({ type: 'clear_session', sessionId });
+    }
+  }
+
   /** Current worker state: 'idle' or 'busy'. */
   get state() {
     return this._state;
