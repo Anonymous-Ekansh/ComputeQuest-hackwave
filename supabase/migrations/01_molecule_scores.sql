@@ -25,5 +25,6 @@ ALTER TABLE molecule_scores ENABLE ROW LEVEL SECURITY;
 -- Allow anyone to read leaderboard
 CREATE POLICY "Anyone can view molecule scores" ON molecule_scores FOR SELECT USING (true);
 
--- Allow authenticated service role (our Node server) to insert/update
-CREATE POLICY "Service role can insert/update molecule scores" ON molecule_scores FOR ALL USING (true);
+-- Allow inserts and updates (Node server might be using anon key or service role)
+CREATE POLICY "Server can insert molecule scores" ON molecule_scores FOR INSERT WITH CHECK (true);
+CREATE POLICY "Server can update molecule scores" ON molecule_scores FOR UPDATE USING (true);

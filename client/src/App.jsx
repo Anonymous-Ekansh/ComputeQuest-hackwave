@@ -64,7 +64,7 @@ function App() {
   // Fetch molecule leaderboard data
   const fetchResearchData = async () => {
     try {
-      const serverUrl = import.meta.env.VITE_SERVER_URL || SERVER_URL;
+      const serverUrl = import.meta.env.VITE_SERVER_URL || SERVER_URL || '';
       const res = await fetch(`${serverUrl}/api/leaderboard/molecules`);
       if (res.ok) {
         const data = await res.json();
