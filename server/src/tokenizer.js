@@ -22,7 +22,7 @@ class Tokenizer {
     }
     
     // For Llama/Sentencepiece, space is represented as   (U+2581)
-    this.SPACE_CHAR = ' ';
+    this.SPACE_CHAR = '\u2581';
     
     this.bosId = exportData.bos_token_id || 1;
     this.eosId = exportData.eos_token_id || 2;
@@ -61,16 +61,30 @@ class Tokenizer {
   }
 
   decode(tokenIds) {
+    const bytes = [];
     let text = '';
+    
+    // Helper to decode accumulated bytes
+    const flushBytes = () => {
+      if (bytes.length > 0) {
+        text += new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+        bytes.length = 0;
+      }
+    };
+
     for (const id of tokenIds) {
       if (id === this.bosId || id === this.eosId) continue;
       let token = this.idToToken[id] || '';
       if (token.startsWith('<0x') && token.endsWith('>')) {
         const hex = token.substring(3, 5);
-        token = String.fromCharCode(parseInt(hex, 16));
+        bytes.push(parseInt(hex, 16));
+      } else {
+        flushBytes();
+        text += token;
       }
-      text += token;
     }
+    flushBytes();
+    
     return text.replace(new RegExp(this.SPACE_CHAR, 'g'), ' ');
   }
 

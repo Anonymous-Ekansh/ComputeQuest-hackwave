@@ -1221,12 +1221,10 @@ function setupSocketHandler(io) {
         // validate client claim matches server simulation
         if (won !== serverSaysWon) {
           console.warn(`[battle] MISMATCH: ${node.username} claimed ${won ? 'win' : 'loss'} but server says ${serverSaysWon ? 'win' : 'loss'}`);
-          // We no longer strictly reject mismatches because the client has a manual attack mechanic 
-          // that the server's pure auto-attack simulation cannot account for.
         }
 
         // update trophies
-        const delta = won ? TROPHY_WIN : TROPHY_LOSS;
+        const delta = serverSaysWon ? TROPHY_WIN : TROPHY_LOSS;
         const newTrophies = Math.max(0, currentTrophies + delta);
 
         if (supabase) {
@@ -1386,39 +1384,33 @@ function setupSocketHandler(io) {
         return;
       }
 
-      const stages = planStages(LLM_LAYERS, idleIds.length);
-      const assignedNodes = [];
-      for (let i = 0; i < stages.length; i++) {
-        const nodeId = idleIds[i];
-        markBusy(nodeId);
-        assignedNodes.push(nodeId);
-        stages[i].socketId = nodeId;
-      }
+      // Pick ONE fast node for Request-Parallel inference
+      const assignedNodeId = getFastestIdleNode() || idleIds[0];
+      markBusy(assignedNodeId);
 
       let allResponded = true;
       try {
-        await Promise.all(assignedNodes.map(nodeId => {
-          return new Promise((resolve, reject) => {
-            const targetSocket = io.sockets.sockets.get(nodeId);
-            if (!targetSocket) return reject(new Error('Node missing'));
+        await new Promise((resolve, reject) => {
+          const targetSocket = io.sockets.sockets.get(assignedNodeId);
+          if (!targetSocket) return reject(new Error('Node missing'));
 
-            const timer = setTimeout(() => reject(new Error('Ping timeout')), 3000);
+          const timer = setTimeout(() => reject(new Error('Ping timeout')), 3000);
 
-            targetSocket.emit('pipeline:ping', {}, () => {
-              clearTimeout(timer);
-              resolve();
-            });
+          targetSocket.emit('pipeline:ping', {}, () => {
+            clearTimeout(timer);
+            resolve();
           });
-        }));
+        });
       } catch (err) {
         allResponded = false;
       }
 
       if (!allResponded) {
-        assignedNodes.forEach(nodeId => markIdle(nodeId, io));
-        socket.emit('generation_error', { sessionId, reason: 'Ping failed for pipeline nodes. Aborting.' });
+        markIdle(assignedNodeId, io);
+        socket.emit('generation_error', { sessionId, reason: 'Ping failed for node. Aborting.' });
         return;
       }
+
       let tokenizer, chatPrompt, tokenIds;
       try {
         tokenizer = getTokenizer();
@@ -1426,17 +1418,23 @@ function setupSocketHandler(io) {
         tokenIds = tokenizer.encode(chatPrompt);
       } catch (err) {
         console.error('[pipeline] Error initializing tokenizer:', err);
-        assignedNodes.forEach(nodeId => markIdle(nodeId, io));
+        markIdle(assignedNodeId, io);
         socket.emit('generation_error', { sessionId, reason: 'Tokenizer unavailable on server.' });
         return;
       }
 
+      const stages = [{
+        stageIndex: 0,
+        layerRange: [0, LLM_LAYERS - 1], // All layers
+        role: 'all',
+        socketId: assignedNodeId
+      }];
+
       activePipelines.set(sessionId, {
         clientSocketId: socket.id,
         stages,
-        activeNodes: new Set(assignedNodes),
+        activeNodes: new Set([assignedNodeId]),
         promptTokens: tokenIds,
-        posOff: 0,
         stallTimer: null,
         expectedStageIndex: 0
       });
@@ -1444,138 +1442,95 @@ function setupSocketHandler(io) {
       // Global broadcast for UI visualization
       io.emit('pipeline_plan', { sessionId, stages });
 
-      stages.forEach(stage => {
-        const targetSocket = io.sockets.sockets.get(stage.socketId);
-        if (targetSocket) {
-          targetSocket.emit('stage_assign', {
-            sessionId,
-            stageIndex: stage.stageIndex,
-            layerRange: stage.layerRange,
-            role: stage.role
-          });
-        }
-      });
+      const targetSocket = io.sockets.sockets.get(assignedNodeId);
+      if (targetSocket) {
+        targetSocket.emit('stage_assign', {
+          sessionId,
+          stageIndex: 0,
+          layerRange: [0, LLM_LAYERS - 1],
+          role: 'all'
+        });
+      }
 
-      // Wait for all nodes to load their model shards
+      // Wait for node to load its model shards
       let allReady = true;
       try {
-        await Promise.all(assignedNodes.map(nodeId => {
-          return new Promise((resolve, reject) => {
-            const targetSocket = io.sockets.sockets.get(nodeId);
-            if (!targetSocket) return reject(new Error('Node missing'));
+        await new Promise((resolve, reject) => {
+          const targetSocket = io.sockets.sockets.get(assignedNodeId);
+          if (!targetSocket) return reject(new Error('Node missing'));
 
-            const timeoutMs = process.env.SHARD_LOAD_TIMEOUT_MS ? parseInt(process.env.SHARD_LOAD_TIMEOUT_MS, 10) : 180000;
-            const timer = setTimeout(() => {
-              targetSocket.removeAllListeners('stage_ready'); // clean up this promise's listener if timeout
-              reject(new Error('Shard loading timeout'));
-            }, timeoutMs);
+          const timeoutMs = process.env.SHARD_LOAD_TIMEOUT_MS ? parseInt(process.env.SHARD_LOAD_TIMEOUT_MS, 10) : 180000;
+          const timer = setTimeout(() => {
+            targetSocket.removeAllListeners('stage_ready');
+            reject(new Error('Shard loading timeout'));
+          }, timeoutMs);
 
-            const onStageReady = (data) => {
-              if (data.sessionId === sessionId) {
-                clearTimeout(timer);
-                targetSocket.removeListener('stage_ready', onStageReady);
-                resolve();
-              }
-            };
+          const onStageReady = (data) => {
+            if (data.sessionId === sessionId) {
+              clearTimeout(timer);
+              targetSocket.removeListener('stage_ready', onStageReady);
+              resolve();
+            }
+          };
 
-            targetSocket.on('stage_ready', onStageReady);
-          });
-        }));
+          targetSocket.on('stage_ready', onStageReady);
+        });
       } catch (err) {
         console.error(`[pipeline] Stage ready wait failed:`, err.message);
         allReady = false;
       }
 
       if (!allReady) {
-        abortPipelineSession(sessionId, io, 'Shard loading timed out for one or more pipeline nodes.');
+        abortPipelineSession(sessionId, io, 'Model loading timed out for node.');
         return;
       }
 
-      const stage0Socket = io.sockets.sockets.get(stages[0].socketId);
+      const stage0Socket = io.sockets.sockets.get(assignedNodeId);
       if (stage0Socket) {
         resetStallTimer(sessionId, 0, io);
         stage0Socket.emit('forward_request', {
           sessionId,
           stageIndex: 0,
-          hiddenStates: null,
-          positionId: 0,
           tokenIndex: tokenIds
         });
         io.emit('pipeline_progress', { sessionId, stageIndex: 0 });
       }
     });
 
-    socket.on('forward_response', ({ sessionId, stageIndex, hiddenStates, tokenId }) => {
+    socket.on('forward_response', ({ sessionId, stageIndex, tokenId }) => {
       const session = activePipelines.get(sessionId);
       if (!session) return;
 
-      if (session.expectedStageIndex !== undefined && stageIndex !== session.expectedStageIndex) {
-        console.warn(`[pipeline] Unexpected stage response. Expected ${session.expectedStageIndex}, got ${stageIndex}`);
-        return; 
-      }
-      
       if (session.stallTimer) {
         clearTimeout(session.stallTimer);
         session.stallTimer = null;
       }
 
-      const isLastStage = stageIndex === session.stages.length - 1;
+      let tokenizer;
+      try {
+        tokenizer = getTokenizer();
+      } catch (err) {
+        console.error('[pipeline] Tokenizer unavailable during decoding:', err);
+        abortPipelineSession(sessionId, io, 'Tokenizer unavailable on server.');
+        return;
+      }
 
-      if (!isLastStage) {
-        const nextStage = session.stages[stageIndex + 1];
-        const nextSocket = io.sockets.sockets.get(nextStage.socketId);
-        if (nextSocket) {
-          resetStallTimer(sessionId, nextStage.stageIndex, io);
-          nextSocket.emit('forward_request', {
-            sessionId,
-            stageIndex: nextStage.stageIndex,
-            hiddenStates,
-            positionId: session.posOff,
-            tokenIndex: null
-          });
-          io.emit('pipeline_progress', { sessionId, stageIndex: nextStage.stageIndex });
-        }
+      let tokenText = '';
+      if (tokenId !== undefined) {
+        tokenText = tokenizer.decode([tokenId]);
+      }
+
+      const clientSocket = io.sockets.sockets.get(session.clientSocketId);
+      if (clientSocket) {
+        clientSocket.emit('final_token', { sessionId, tokenId, tokenText });
+      }
+
+      if (tokenId === tokenizer.eosId) {
+        io.emit('pipeline_end', { sessionId });
+        finishPipelineSession(sessionId, io);
       } else {
-        let tokenizer;
-        try {
-          tokenizer = getTokenizer();
-        } catch (err) {
-          console.error('[pipeline] Tokenizer unavailable during decoding:', err);
-          abortPipelineSession(sessionId, io, 'Tokenizer unavailable on server.');
-          return;
-        }
-
-        let tokenText = '';
-        if (tokenId !== undefined) {
-          tokenText = tokenizer.decode([tokenId]);
-        }
-
-        const clientSocket = io.sockets.sockets.get(session.clientSocketId);
-        if (clientSocket) {
-          clientSocket.emit('final_token', { sessionId, tokenId, tokenText });
-        }
-
-        if (tokenId === tokenizer.eosId) {
-          io.emit('pipeline_end', { sessionId });
-          finishPipelineSession(sessionId, io);
-        } else {
-          const tokensSentSoFar = session.posOff === 0 ? session.promptTokens.length : 1;
-          session.posOff += tokensSentSoFar;
-
-          const stage0 = session.stages[0];
-          const stage0Socket = io.sockets.sockets.get(stage0.socketId);
-          if (stage0Socket) {
-            resetStallTimer(sessionId, 0, io);
-            stage0Socket.emit('forward_request', {
-              sessionId,
-              stageIndex: 0,
-              hiddenStates: null,
-              positionId: session.posOff,
-              tokenIndex: [tokenId]
-            });
-            io.emit('pipeline_progress', { sessionId, stageIndex: 0 });
-          }
-        }
+        // Reset stall timer for the next streamed token
+        resetStallTimer(sessionId, 0, io);
       }
     });
 
@@ -1591,8 +1546,8 @@ function setupSocketHandler(io) {
 
       // Pipeline disconnect check
       for (const [sessionId, session] of activePipelines.entries()) {
-        if (session.activeNodes.has(socket.id)) {
-          abortPipelineSession(sessionId, io, 'a node dropped — restarting');
+        if (session.activeNodes.has(socket.id) || session.clientSocketId === socket.id) {
+          abortPipelineSession(sessionId, io, 'a node or client dropped — restarting');
         }
       }
 

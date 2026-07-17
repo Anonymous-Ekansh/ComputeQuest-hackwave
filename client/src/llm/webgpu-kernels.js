@@ -732,6 +732,37 @@ export function runDecoderLayer(device, w, hBuf, seqLen, kvCache, posOff) {
   // ─── submit ──────────────────────────────────────────────────────────
   device.queue.submit([enc.finish()]);
 
+  // Clean up intermediate buffers and uniforms
+  residual.destroy();
+  normed.destroy();
+  normU.destroy();
+  qBuf.destroy();
+  kBuf.destroy();
+  vBuf.destroy();
+  qU.destroy();
+  kU.destroy();
+  vU.destroy();
+  ropeQU.destroy();
+  ropeKU.destroy();
+  scoresBuf.destroy();
+  scoreU.destroy();
+  softU.destroy();
+  attnBuf.destroy();
+  attnU.destroy();
+  oBuf.destroy();
+  oU.destroy();
+  mid.destroy();
+  addU.destroy();
+  residual2.destroy();
+  normed2.destroy();
+  norm2U.destroy();
+  gateBuf.destroy();
+  upBuf.destroy();
+  mlpU.destroy();
+  siluU.destroy();
+  downBuf.destroy();
+  downU.destroy();
+
   return {
     hiddenStates: finalBuf,
     kvCache: { k: kFull, v: vFull, length: totalKV },

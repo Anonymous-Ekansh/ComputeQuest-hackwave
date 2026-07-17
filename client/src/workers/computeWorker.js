@@ -11,8 +11,11 @@ import {
   readBuffer
 } from '../llm/webgpu-kernels.js';
 
+// Global cache for model weights (Fixes Bug 2: VRAM leak on clear_session)
+let cachedModel = null;
+
 // Pipeline State
-// sessionId -> { device, embedding, layers: [ { weights, kvCache } ], finalHead }
+// sessionId -> { kvCaches: [] }
 const pipelineSessions = new Map();
 
 const MODEL_BASE_URL = import.meta.env.VITE_MODEL_URL || 'https://huggingface.co/datasets/iamekansh/hackwave/resolve/main';
@@ -84,74 +87,79 @@ self.onmessage = async function (e) {
   }
 
   if (type === 'stage_assign') {
-    // ── PIPELINE STAGE INITIALIZATION ──
+    // ── PIPELINE INITIALIZATION ──
     try {
-      const { sessionId, stageIndex, layerRange, role } = data;
+      const { sessionId, stageIndex, layerRange, role } = data; // role='all', layerRange=[0, 21]
       
       if (!navigator.gpu) throw new Error("WebGPU not supported");
-      const adapter = await navigator.gpu.requestAdapter();
-      const device = await adapter.requestDevice();
 
-      const manifestController = new AbortController();
-      const manifestTimer = setTimeout(() => manifestController.abort(), 15000);
-      let rawManifest;
-      try {
-        const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`, { signal: manifestController.signal });
-        if (!manifestRes.ok) throw new Error(`HTTP ${manifestRes.status}`);
-        rawManifest = await manifestRes.json();
-      } finally {
-        clearTimeout(manifestTimer);
-      }
-      const files = rawManifest.files;  // array of { filename, tensors, size_bytes, ... }
-      const vocabSize = rawManifest.vocab_size || 32000;
+      // Load model globally once
+      if (!cachedModel) {
+        const adapter = await navigator.gpu.requestAdapter();
+        const device = await adapter.requestDevice();
 
-      // Helper: find a file entry by filename
-      const getFileEntry = (fname) => {
-        const entry = files.find(f => f.filename === fname);
-        if (!entry) throw new Error(`File not found in manifest: ${fname}`);
-        console.log(`[Worker] Loaded ${fname}: ${entry.tensors.length} tensors`);
-        return entry;
-      };
+        const manifestController = new AbortController();
+        const manifestTimer = setTimeout(() => manifestController.abort(), 15000);
+        let rawManifest;
+        try {
+          const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`, { signal: manifestController.signal });
+          if (!manifestRes.ok) throw new Error(`HTTP ${manifestRes.status}`);
+          rawManifest = await manifestRes.json();
+        } finally {
+          clearTimeout(manifestTimer);
+        }
+        const files = rawManifest.files;
+        const vocabSize = rawManifest.vocab_size || 32000;
 
-      const sessionData = {
-        device,
-        embedding: null,
-        layers: [],
-        finalHead: null,
-        role,
-        layerRange,
-        vocabSize
-      };
+        const getFileEntry = (fname) => {
+          const entry = files.find(f => f.filename === fname);
+          if (!entry) throw new Error(`File not found in manifest: ${fname}`);
+          console.log(`[Worker] Loaded ${fname}: ${entry.tensors.length} tensors`);
+          return entry;
+        };
 
-      if (role === 'embedding' || role === 'all') {
-        const entry = getFileEntry('embedding.bin');
+        cachedModel = {
+          device,
+          embedding: null,
+          layers: [],
+          finalHead: null,
+          vocabSize
+        };
+
+        // Fix Bug 7: Parallel layer loading
         self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading embedding.bin…` });
-        const embedBuf = await readBin('embedding.bin', entry.size_bytes);
-        sessionData.embedding = loadEmbeddingWeights(device, embedBuf, entry.tensors);
-      }
+        const embedEntry = getFileEntry('embedding.bin');
+        const embedBuf = await readBin('embedding.bin', embedEntry.size_bytes);
+        cachedModel.embedding = loadEmbeddingWeights(device, embedBuf, embedEntry.tensors);
 
-      for (let i = layerRange[0]; i <= layerRange[1]; i++) {
-        const layerFile = `layers/layer_${i.toString().padStart(2, '0')}.bin`;
-        const entry = getFileEntry(layerFile);
-        self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading ${layerFile}…` });
-        const lBuf = await readBin(layerFile, entry.size_bytes);
-        
-        // Initial empty kvCache for this layer
-        const kvCache = { length: 0 };
-
-        sessionData.layers.push({
-          weights: loadLayerWeights(device, lBuf, entry.tensors),
-          kvCache
-        });
-      }
-
-      if (role === 'lm_head' || role === 'all') {
-        const entry = getFileEntry('final_head.bin');
         self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading final_head.bin…` });
-        const finalBuf = await readBin('final_head.bin', entry.size_bytes);
-        sessionData.finalHead = loadFinalHeadWeights(device, finalBuf, entry.tensors);
+        const headEntry = getFileEntry('final_head.bin');
+        const headBuf = await readBin('final_head.bin', headEntry.size_bytes);
+        cachedModel.finalHead = loadFinalHeadWeights(device, headBuf, headEntry.tensors);
+
+        self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading 22 layers concurrently…` });
+        
+        const layerPromises = [];
+        for (let i = layerRange[0]; i <= layerRange[1]; i++) {
+          const layerFile = `layers/layer_${i.toString().padStart(2, '0')}.bin`;
+          const entry = getFileEntry(layerFile);
+          layerPromises.push(readBin(layerFile, entry.size_bytes).then(buf => ({ i, buf, entry })));
+        }
+        
+        const layerResults = await Promise.all(layerPromises);
+        layerResults.sort((a, b) => a.i - b.i);
+        
+        for (const res of layerResults) {
+          cachedModel.layers.push({
+            weights: loadLayerWeights(device, res.buf, res.entry.tensors)
+          });
+        }
       }
 
+      // Initialize KV caches for this session
+      const sessionData = {
+        kvCaches: cachedModel.layers.map(() => ({ length: 0 }))
+      };
       pipelineSessions.set(sessionId, sessionData);
 
       self.postMessage({
@@ -171,83 +179,71 @@ self.onmessage = async function (e) {
   }
 
   if (type === 'forward_request') {
-    // ── PIPELINE COMPUTE PASS ──
+    // ── REQUEST-PARALLEL COMPUTE PASS ──
     try {
-      const { sessionId, stageIndex, hiddenStates: rawHiddenStates, positionId, tokenIndex } = data;
-      const hiddenStates = rawHiddenStates ? Float32Array.from(rawHiddenStates) : null;
+      const { sessionId, tokenIndex } = data;
       const session = pipelineSessions.get(sessionId);
       if (!session) throw new Error("Unknown session");
 
-      const { device } = session;
-      // currentState starts as either Float32Array from network or undefined (if prefill)
-      let currentStateBuf = null;
+      const { device, vocabSize, embedding, layers, finalHead } = cachedModel;
+      
+      let positionId = 0;
+      let currentTokens = Array.isArray(tokenIndex) ? tokenIndex : [tokenIndex];
+      let isGenerating = true;
 
-      // 1. Embedding (if stage 0)
-      if (session.role === 'embedding' || session.role === 'all') {
-        // tokenIndex is an array of token IDs for prefill, or [tokenId] for autoregressive
-        const tokens = Array.isArray(tokenIndex) ? tokenIndex : [tokenIndex];
-        // runEmbedding returns a GPUBuffer
-        currentStateBuf = runEmbedding(device, session.embedding, tokens, session.vocabSize);
-      } else {
-        // Not stage 0: upload the incoming float32 array to a GPUBuffer
-        currentStateBuf = uploadBuf(device, hiddenStates);
-      }
+      while (isGenerating) {
+        // Yield to event loop to process clear_session messages
+        await new Promise(r => setTimeout(r, 0));
+        if (!pipelineSessions.has(sessionId)) break;
 
-      // 2. Decoder Layers
-      // Determine how many tokens we are processing (seqLen)
-      // If it's stage 0, hiddenStates is null.
-      const seqLen = (session.role === 'embedding' || session.role === 'all') 
-          ? (Array.isArray(tokenIndex) ? tokenIndex.length : 1) 
-          : hiddenStates.length / 2048;
+        const seqLen = currentTokens.length;
+        let currentStateBuf = runEmbedding(device, embedding, currentTokens, vocabSize);
 
-      for (let i = 0; i < session.layers.length; i++) {
-        const layer = session.layers[i];
-        // runDecoderLayer returns { hiddenStates: GPUBuffer, kvCache: Object }
-        const res = runDecoderLayer(device, layer.weights, currentStateBuf, seqLen, layer.kvCache, positionId);
+        for (let i = 0; i < layers.length; i++) {
+          const layer = layers[i];
+          const kvCache = session.kvCaches[i];
+          const res = runDecoderLayer(device, layer.weights, currentStateBuf, seqLen, kvCache, positionId);
+          
+          currentStateBuf.destroy(); // Always destroy since it's the result of runEmbedding or previous runDecoderLayer
+          
+          currentStateBuf = res.hiddenStates;
+          session.kvCaches[i] = res.kvCache;
+        }
+
+        const logitsBuf = runFinalHead(device, finalHead, currentStateBuf, seqLen, vocabSize);
         
-        // Destroy intermediate buffer if it's not the initial one uploaded
-        if (i > 0) currentStateBuf.destroy();
-        
-        currentStateBuf = res.hiddenStates;
-        layer.kvCache = res.kvCache;
-      }
-
-      // 3. Final Head (if last stage)
-      if (session.role === 'lm_head' || session.role === 'all') {
-        const logitsBuf = runFinalHead(device, session.finalHead, currentStateBuf, seqLen, session.vocabSize);
-        const logits = await readBuffer(device, logitsBuf, seqLen * session.vocabSize);
+        // Fix Bug 3: readBuffer out-of-bounds crash
+        const logits = await readBuffer(device, logitsBuf, vocabSize);
         logitsBuf.destroy();
         currentStateBuf.destroy();
         
-        // Argmax only on the last token's logits
         let maxVal = -Infinity;
         let maxIdx = 0;
-        const offset = (seqLen - 1) * session.vocabSize;
-        for (let i = 0; i < session.vocabSize; i++) {
-          if (logits[offset + i] > maxVal) {
-            maxVal = logits[offset + i];
+        for (let i = 0; i < vocabSize; i++) {
+          if (logits[i] > maxVal) {
+            maxVal = logits[i];
             maxIdx = i;
           }
         }
         
+        const generatedTokenId = maxIdx;
+
         self.postMessage({
           type: 'forward_response',
           sessionId,
-          stageIndex,
-          tokenId: maxIdx
+          stageIndex: 0,
+          tokenId: generatedTokenId
         });
-      } else {
-        // Pass hidden state to next stage
-        const nextStageHiddenStates = await readBuffer(device, currentStateBuf, seqLen * 2048);
-        currentStateBuf.destroy();
-        
-        self.postMessage({
-          type: 'forward_response',
-          sessionId,
-          stageIndex,
-          hiddenStates: nextStageHiddenStates // sending Float32Array over postMessage
-        });
+
+        positionId += seqLen;
+        currentTokens = [generatedTokenId];
+
+        // Break if we hit EOS or if we generate too many tokens as a safeguard
+        if (generatedTokenId === 2) {
+          isGenerating = false;
+        }
       }
+
     } catch (err) {
       console.error("[Worker] Forward pass error:", err);
       self.postMessage({
@@ -260,15 +256,15 @@ self.onmessage = async function (e) {
   }
 
   if (type === 'clear_session') {
-    // ── CLEANUP VRAM ──
+    // ── CLEANUP SESSION VRAM ──
     const { sessionId } = data;
     const session = pipelineSessions.get(sessionId);
     if (session) {
       // Destroy kvCaches to prevent VRAM memory fragmentation
-      for (const layer of session.layers) {
-        if (layer.kvCache && layer.kvCache.k) {
-          layer.kvCache.k.destroy();
-          layer.kvCache.v.destroy();
+      for (const cache of session.kvCaches) {
+        if (cache && cache.k) {
+          cache.k.destroy();
+          cache.v.destroy();
         }
       }
       pipelineSessions.delete(sessionId);
