@@ -192,10 +192,6 @@ function App() {
 
       // when server sends a batch, queue it through the WorkerManager
       socket.on('molecule_batch', (batch) => {
-        if (!userInfoRef.current.isAuthenticated) {
-          console.warn('[client] Dropping batch: unauthenticated');
-          return;
-        }
         addLog(`Received batch ${batch.batchId} (${batch.molecules.length} molecules)`);
         workerManager.sendChunk({ type: 'molecule_batch', ...batch });
       });

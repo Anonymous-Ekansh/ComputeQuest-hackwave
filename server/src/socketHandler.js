@@ -693,9 +693,10 @@ function setupSocketHandler(io) {
       const node = nodes.get(socket.id);
       if (node) {
         node.supportsInference = supportsInference;
-        node.status = 'idle';
-        drainRequeued(io);
-        tryDispatchNext(io);
+        // Don't set status to idle here — the async auth block does that
+        // after authentication completes, preventing the race condition
+        // where batches are dispatched before userId is set.
+        console.log(`[register] ${socket.id} registered (inference: ${supportsInference})`);
       }
     });
 
