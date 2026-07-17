@@ -252,8 +252,8 @@ function markIdleSilent(socketId) {
 }
 
 /** Get the fastest idle node by avgMsPerRow (lowest = fastest) */
-function getFastestIdleNode() {
-  const idle = getIdleNodeIds();
+function getFastestIdleNode(customIds = null) {
+  const idle = customIds || getIdleNodeIds();
   if (idle.length === 0) return null;
 
   let best = idle[0];
@@ -783,7 +783,9 @@ function setupSocketHandler(io) {
       tasksCompleted: 0,
       credits: 0,
       status: 'unauthenticated',
-      supportsInference: false
+      supportsInference: false,
+      isWarm: false,
+      warmProgress: 0
     });
 
     socket.on('dev_auth', () => { const n = nodes.get(socket.id); if (n) n.status = 'idle'; });
@@ -795,6 +797,21 @@ function setupSocketHandler(io) {
         node.status = 'idle';
         drainRequeued(io);
         tryDispatchNext(io);
+      }
+    });
+
+    socket.on('node_warm_progress', ({ percent }) => {
+      const node = nodes.get(socket.id);
+      if (node) {
+        node.warmProgress = percent;
+      }
+    });
+
+    socket.on('node_warm_ready', () => {
+      const node = nodes.get(socket.id);
+      if (node) {
+        node.isWarm = true;
+        node.warmProgress = 100;
       }
     });
 
@@ -1384,8 +1401,20 @@ function setupSocketHandler(io) {
         return;
       }
 
-      // Pick ONE fast node for Request-Parallel inference
-      const assignedNodeId = getFastestIdleNode() || idleIds[0];
+      // Pick ONE fast node for Request-Parallel inference, prefer warm nodes
+      let warmIdleIds = idleIds.filter(id => {
+        const n = nodes.get(id);
+        return n && n.isWarm;
+      });
+      
+      let assignedNodeId;
+      if (warmIdleIds.length > 0) {
+        assignedNodeId = getFastestIdleNode(warmIdleIds) || warmIdleIds[0];
+      } else {
+        assignedNodeId = getFastestIdleNode(idleIds) || idleIds[0];
+        socket.emit('generation_warning', { warning: 'No warm node available; this reply may take several minutes while a node loads the model for the first time' });
+      }
+      
       markBusy(assignedNodeId);
 
       let allResponded = true;
@@ -1459,21 +1488,51 @@ function setupSocketHandler(io) {
           const targetSocket = io.sockets.sockets.get(assignedNodeId);
           if (!targetSocket) return reject(new Error('Node missing'));
 
-          const timeoutMs = process.env.SHARD_LOAD_TIMEOUT_MS ? parseInt(process.env.SHARD_LOAD_TIMEOUT_MS, 10) : 180000;
-          const timer = setTimeout(() => {
+          const envTimeout = process.env.SHARD_LOAD_TIMEOUT_MS ? parseInt(process.env.SHARD_LOAD_TIMEOUT_MS, 10) : null;
+          const outerTimeoutMs = envTimeout || 1800000; // 30 minutes absolute max or env override
+          let progressTimerMs = 90000; // 90 seconds progress timeout
+          let progressTimer = null;
+          let outerTimer = null;
+          
+          const clearTimers = () => {
+            if (progressTimer) clearTimeout(progressTimer);
+            if (outerTimer) clearTimeout(outerTimer);
+          };
+
+          const onProgress = () => {
+            resetProgressTimer();
+          };
+
+          const resetProgressTimer = () => {
+            if (progressTimer) clearTimeout(progressTimer);
+            progressTimer = setTimeout(() => {
+              targetSocket.removeAllListeners('stage_ready');
+              targetSocket.removeListener('node_warm_progress', onProgress);
+              clearTimers();
+              reject(new Error('Shard loading stalled (no progress for 90s)'));
+            }, progressTimerMs);
+          };
+
+          outerTimer = setTimeout(() => {
             targetSocket.removeAllListeners('stage_ready');
-            reject(new Error('Shard loading timeout'));
-          }, timeoutMs);
+            targetSocket.removeListener('node_warm_progress', onProgress);
+            clearTimers();
+            reject(new Error('Shard loading hit absolute maximum time limit'));
+          }, outerTimeoutMs);
+          
+          targetSocket.on('node_warm_progress', onProgress);
 
           const onStageReady = (data) => {
             if (data.sessionId === sessionId) {
-              clearTimeout(timer);
               targetSocket.removeListener('stage_ready', onStageReady);
+              targetSocket.removeListener('node_warm_progress', onProgress);
+              clearTimers();
               resolve();
             }
           };
 
           targetSocket.on('stage_ready', onStageReady);
+          resetProgressTimer(); // start initial 90s timer
         });
       } catch (err) {
         console.error(`[pipeline] Stage ready wait failed:`, err.message);

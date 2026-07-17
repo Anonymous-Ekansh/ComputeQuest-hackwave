@@ -13,6 +13,107 @@ import {
 
 // Global cache for model weights (Fixes Bug 2: VRAM leak on clear_session)
 let cachedModel = null;
+let loadingPromise = null;
+
+async function ensureModelLoaded(onProgress) {
+  if (cachedModel) return cachedModel;
+  if (loadingPromise) return loadingPromise;
+
+  loadingPromise = (async () => {
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      const device = await adapter.requestDevice();
+
+      const manifestController = new AbortController();
+      const manifestTimer = setTimeout(() => manifestController.abort(), 15000);
+      let rawManifest;
+      try {
+        const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`, { signal: manifestController.signal });
+        if (!manifestRes.ok) throw new Error(`HTTP ${manifestRes.status}`);
+        rawManifest = await manifestRes.json();
+      } finally {
+        clearTimeout(manifestTimer);
+      }
+      const files = rawManifest.files;
+      const vocabSize = rawManifest.vocab_size || 32000;
+
+      let totalBytes = 0;
+      for (const f of files) {
+        totalBytes += f.size_bytes;
+      }
+      
+      let loadedBytes = 0;
+      const getFileEntry = (fname) => {
+        const entry = files.find(f => f.filename === fname);
+        if (!entry) throw new Error(`File not found in manifest: ${fname}`);
+        return entry;
+      };
+
+      const loadFile = async (fname, entry) => {
+        const buf = await readBin(fname, entry.size_bytes);
+        loadedBytes += entry.size_bytes;
+        if (onProgress) {
+          onProgress(loadedBytes, totalBytes, `Loaded ${fname}`);
+        }
+        return buf;
+      };
+
+      const model = {
+        device,
+        embedding: null,
+        layers: [],
+        finalHead: null,
+        vocabSize
+      };
+
+      const embedEntry = getFileEntry('embedding.bin');
+      const headEntry = getFileEntry('final_head.bin');
+      const layerEntries = [];
+      for (let i = 0; i <= 21; i++) {
+        const fname = `layers/layer_${i.toString().padStart(2, '0')}.bin`;
+        layerEntries.push({ fname, i, entry: getFileEntry(fname) });
+      }
+
+      const allPromises = [];
+      
+      const pEmbed = loadFile('embedding.bin', embedEntry).then(buf => {
+        model.embedding = loadEmbeddingWeights(device, buf, embedEntry.tensors);
+      });
+      allPromises.push(pEmbed);
+
+      const pHead = loadFile('final_head.bin', headEntry).then(buf => {
+        model.finalHead = loadFinalHeadWeights(device, buf, headEntry.tensors);
+      });
+      allPromises.push(pHead);
+
+      const layerResults = [];
+      for (const { fname, i, entry } of layerEntries) {
+        const pLayer = loadFile(fname, entry).then(buf => {
+          layerResults.push({ i, buf, entry });
+        });
+        allPromises.push(pLayer);
+      }
+
+      await Promise.all(allPromises);
+
+      layerResults.sort((a, b) => a.i - b.i);
+      for (const res of layerResults) {
+        model.layers.push({
+          weights: loadLayerWeights(device, res.buf, res.entry.tensors)
+        });
+      }
+
+      cachedModel = model;
+      loadingPromise = null;
+      return model;
+    } catch (err) {
+      loadingPromise = null;
+      throw err;
+    }
+  })();
+
+  return loadingPromise;
+}
 
 // Pipeline State
 // sessionId -> { kvCaches: [] }
@@ -86,6 +187,29 @@ self.onmessage = async function (e) {
     return;
   }
 
+    if (type === 'start_background_warmup') {
+      if (cachedModel) {
+        self.postMessage({ type: 'node_warm_ready' });
+        return;
+      }
+      
+      ensureModelLoaded((loadedBytes, totalBytes, label) => {
+        const percentComplete = Math.round((loadedBytes / totalBytes) * 100);
+        self.postMessage({ 
+          type: 'node_warm_progress', 
+          percent: percentComplete,
+          loadedBytes,
+          totalBytes,
+          label
+        });
+      }).then(() => {
+        self.postMessage({ type: 'node_warm_ready' });
+      }).catch(err => {
+        console.error("[Worker] Background warmup failed:", err);
+      });
+      return;
+    }
+
   if (type === 'stage_assign') {
     // ── PIPELINE INITIALIZATION ──
     try {
@@ -94,67 +218,18 @@ self.onmessage = async function (e) {
       if (!navigator.gpu) throw new Error("WebGPU not supported");
 
       // Load model globally once
-      if (!cachedModel) {
-        const adapter = await navigator.gpu.requestAdapter();
-        const device = await adapter.requestDevice();
-
-        const manifestController = new AbortController();
-        const manifestTimer = setTimeout(() => manifestController.abort(), 15000);
-        let rawManifest;
-        try {
-          const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`, { signal: manifestController.signal });
-          if (!manifestRes.ok) throw new Error(`HTTP ${manifestRes.status}`);
-          rawManifest = await manifestRes.json();
-        } finally {
-          clearTimeout(manifestTimer);
-        }
-        const files = rawManifest.files;
-        const vocabSize = rawManifest.vocab_size || 32000;
-
-        const getFileEntry = (fname) => {
-          const entry = files.find(f => f.filename === fname);
-          if (!entry) throw new Error(`File not found in manifest: ${fname}`);
-          console.log(`[Worker] Loaded ${fname}: ${entry.tensors.length} tensors`);
-          return entry;
-        };
-
-        cachedModel = {
-          device,
-          embedding: null,
-          layers: [],
-          finalHead: null,
-          vocabSize
-        };
-
-        // Fix Bug 7: Parallel layer loading
-        self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading embedding.bin…` });
-        const embedEntry = getFileEntry('embedding.bin');
-        const embedBuf = await readBin('embedding.bin', embedEntry.size_bytes);
-        cachedModel.embedding = loadEmbeddingWeights(device, embedBuf, embedEntry.tensors);
-
-        self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading final_head.bin…` });
-        const headEntry = getFileEntry('final_head.bin');
-        const headBuf = await readBin('final_head.bin', headEntry.size_bytes);
-        cachedModel.finalHead = loadFinalHeadWeights(device, headBuf, headEntry.tensors);
-
-        self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading 22 layers concurrently…` });
-        
-        const layerPromises = [];
-        for (let i = layerRange[0]; i <= layerRange[1]; i++) {
-          const layerFile = `layers/layer_${i.toString().padStart(2, '0')}.bin`;
-          const entry = getFileEntry(layerFile);
-          layerPromises.push(readBin(layerFile, entry.size_bytes).then(buf => ({ i, buf, entry })));
-        }
-        
-        const layerResults = await Promise.all(layerPromises);
-        layerResults.sort((a, b) => a.i - b.i);
-        
-        for (const res of layerResults) {
-          cachedModel.layers.push({
-            weights: loadLayerWeights(device, res.buf, res.entry.tensors)
-          });
-        }
-      }
+      await ensureModelLoaded((loadedBytes, totalBytes, label) => {
+        const percentComplete = Math.round((loadedBytes / totalBytes) * 100);
+        self.postMessage({ 
+          type: 'node_warm_progress', 
+          percent: percentComplete,
+          loadedBytes,
+          totalBytes,
+          label
+        });
+      });
+      
+      self.postMessage({ type: 'node_warm_ready' });
 
       // Initialize KV caches for this session
       const sessionData = {

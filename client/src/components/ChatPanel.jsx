@@ -35,14 +35,23 @@ export default function ChatPanel({ socket }) {
       setIsGenerating(false);
     };
 
+    const handleGenerationWarning = ({ warning }) => {
+      setMessages(prev => [
+        ...prev, 
+        { role: 'system', content: `Warning: ${warning}` }
+      ]);
+    };
+
     socket.on('final_token', handleFinalToken);
     socket.on('pipeline_end', handlePipelineEnd);
     socket.on('generation_error', handleGenerationError);
+    socket.on('generation_warning', handleGenerationWarning);
 
     return () => {
       socket.off('final_token', handleFinalToken);
       socket.off('pipeline_end', handlePipelineEnd);
       socket.off('generation_error', handleGenerationError);
+      socket.off('generation_warning', handleGenerationWarning);
     };
   }, [socket]);
 

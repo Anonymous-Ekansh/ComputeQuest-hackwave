@@ -6,6 +6,7 @@ import Leaderboard from './Leaderboard';
 import TheForge from './forge/TheForge';
 import Dashboard from './components/Dashboard';
 import ChatPanel from './components/ChatPanel';
+import WarmupProgress from './components/WarmupProgress';
 import { runDeviceBenchmark } from './benchmark';
 import './App.css';
 
@@ -36,6 +37,7 @@ function App() {
 
   // Progress states
   const [taskProgress, setTaskProgress] = useState(null);
+  const [warmProgress, setWarmProgress] = useState(null);
 
   // Benchmark states
   const [deviceBenchmark, setDeviceBenchmark] = useState(null);
@@ -126,6 +128,9 @@ function App() {
           }
         }
         socket.emit('register_worker', { supportsInference });
+        if (supportsInference) {
+          workerManager.postPipelineMessage({ type: 'start_background_warmup' });
+        }
       });
 
       socket.on('disconnect', () => {
@@ -228,6 +233,12 @@ function App() {
             sessionId: msg.sessionId,
             reason: msg.error || 'Worker stage error'
           });
+        } else if (msg.type === 'node_warm_progress') {
+          setWarmProgress({ percent: msg.percent, label: msg.label, loadedBytes: msg.loadedBytes, totalBytes: msg.totalBytes });
+          socket.emit('node_warm_progress', { percent: msg.percent });
+        } else if (msg.type === 'node_warm_ready') {
+          setWarmProgress({ percent: 100, label: 'Ready' });
+          socket.emit('node_warm_ready', {});
         }
       });
     };
@@ -331,6 +342,13 @@ function App() {
           {!userInfo.isAuthenticated && (
             <div className="sidebar-cta">
               <p>Sign in with Google to start contributing compute and earn credits to convert into crystals for The Forge!</p>
+            </div>
+          )}
+
+          {/* Background Warmup Progress */}
+          {warmProgress && warmProgress.percent < 100 && (
+            <div style={{ marginTop: '20px' }}>
+              <WarmupProgress warmProgress={warmProgress} />
             </div>
           )}
 
