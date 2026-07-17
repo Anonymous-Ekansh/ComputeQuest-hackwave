@@ -1,5 +1,4 @@
 import React from 'react';
-import './WarmupProgress.css';
 
 export default function WarmupProgress({ warmProgress }) {
   if (!warmProgress || warmProgress.percent === 100) return null;

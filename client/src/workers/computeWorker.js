@@ -11,14 +11,21 @@ import {
   readBuffer
 } from '../llm/webgpu-kernels.js';
 
-// Global cache for model weights (Fixes Bug 2: VRAM leak on clear_session)
+console.log('[Worker] Booting up...');
 let cachedModel = null;
 let loadingPromise = null;
 
 async function ensureModelLoaded(onProgress) {
-  if (cachedModel) return cachedModel;
-  if (loadingPromise) return loadingPromise;
+  if (cachedModel) {
+    console.log('[Worker] Returning cached model, skipping fetch.');
+    return cachedModel;
+  }
+  if (loadingPromise) {
+    console.log('[Worker] Already loading, returning existing promise.');
+    return loadingPromise;
+  }
 
+  console.log('[Worker] Cache miss. Starting model fetch...');
   loadingPromise = (async () => {
     try {
       const adapter = await navigator.gpu.requestAdapter();
