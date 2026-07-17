@@ -1,8 +1,8 @@
 # ComputeQuest 
 
-> Donate your browser's computing power. Earn territory. Dominate the map.
+> Donate your browser's computing power. Earn crystals. Forge your deck. Dominate the bots.
 
-ComputeQuest is a distributed computing platform disguised as a game. Users contribute idle CPU cycles from their browser to a shared compute pool — powering real research tasks and ML inference. In return, they earn in-game credits to expand their territory on a live 2D strategy map.
+ComputeQuest is a distributed computing platform disguised as a deck-building card game. Users contribute idle CPU cycles from their browser to a shared compute pool — powering real research tasks and ML inference. In return, they earn in-game credits that can be converted into Crystals to buy cards, build a deck, and battle in The Forge.
 
 No downloads. No sign-up friction. Just open a tab and start contributing.
 
@@ -11,26 +11,27 @@ No downloads. No sign-up friction. Just open a tab and start contributing.
 ## How it works
 
 ```
-Your browser tab → Web Worker runs compute chunks silently in background
+Your browser tab → Web Worker runs compute tasks silently in background
       ↓
-WebSocket sends results to coordinator server
+WebSocket sends results and streamed text to coordinator server
       ↓
-Server reassembles chunks, verifies results, awards credits
+Server routes new tasks to idle nodes, aggregates results, awards credits
       ↓
-Credits unlock territory expansion in the live 2D game
+Credits are converted to Crystals to buy cards and build your deck
 ```
 
-Each connected browser is a **compute node**. The server splits heavy tasks (matrix operations, model inference batches) into chunks and distributes them across all online nodes. The more you contribute, the more your territory grows — and the more it glows on everyone else's map.
+Each connected browser is a **compute node**. The server distributes heavy tasks (like matrix operations) across all online nodes in chunks, and routes full LLM inference prompts to idle, warm nodes (Request-Parallel architecture). The more you contribute, the more credits you earn — allowing you to buy rarer cards and defeat harder bot tiers.
 
 ---
 
 ## Features
 
 - **Distributed compute engine** — tasks are chunked server-side and dispatched to browser nodes via WebSocket; results are aggregated and verified automatically
+- **Browser-based LLM Inference** — uses WebLLM to run AI models entirely in the browser. The server routes user prompts to idle nodes, which stream the generated text back in real-time.
 - **Web Worker isolation** — all computation runs in a background thread; your UI stays completely responsive
 - **Real-time node dashboard** — see how many nodes are live, tasks/sec throughput, and your personal contribution stats
 - **Credit system** — every completed compute chunk earns credits stored server-side with a full audit trail
-- **2D territory game** — spend credits to claim and upgrade hex tiles on a shared map; active compute nodes pulse visually on the map
+- **Card Battler Game (The Forge)** — use your compute credits to buy Crystals, purchase cards from the shop, build a 4-card deck, and battle AI bots in an auto-battler with type-advantage mechanics.
 - **Leaderboard** — ranked by total compute contributed (GFlops donated), not just time spent
 
 ---
@@ -41,8 +42,7 @@ Each connected browser is a **compute node**. The server splits heavy tasks (mat
 |---|---|
 | Server | Node.js, Express, Socket.io |
 | Client | React, Vite |
-| Compute | Web Workers API, SharedArrayBuffer |
-| Game | Phaser.js (2D canvas) |
+| Compute | Web Workers API, WebLLM, WebGPU, SharedArrayBuffer |
 | Database | PostgreSQL (SQLite for local dev) |
 | Auth | JWT (HTTP-only cookies) |
 | Deployment | Railway / Render |
@@ -57,7 +57,7 @@ computequest/
 │   ├── src/
 │   │   ├── index.js              # Express + Socket.io entry point
 │   │   ├── taskQueue.js          # Job queue: split, assign, collect chunks
-│   │   ├── socketHandler.js      # WebSocket events: register node, submit result
+│   │   ├── socketHandler.js      # WebSocket events: routing tasks, streaming inference
 │   │   ├── creditEngine.js       # Award and verify credits per completed chunk
 │   │   └── routes/
 │   │       ├── auth.js           # Register, login, JWT issue
@@ -68,13 +68,16 @@ computequest/
 ├── client/
 │   ├── src/
 │   │   ├── App.jsx
+│   │   ├── WorkerManager.js      # Manages Web Worker lifecycle
 │   │   ├── workers/
-│   │   │   └── computeWorker.js  # Web Worker: receives chunk, computes, posts result
-│   │   ├── game/
-│   │   │   ├── GameScene.js      # Phaser scene: hex map, territory rendering
-│   │   │   └── UIScene.js        # HUD: credits, node status, contribution counter
+│   │   │   └── computeWorker.js  # Web Worker: computes chunks, runs WebLLM generation
+│   │   ├── forge/                # The Forge card game components
+│   │   │   ├── TheForge.jsx      # Main game hub
+│   │   │   ├── CardShop.jsx      # Buy cards with Crystals
+│   │   │   ├── DeckBuilder.jsx   # Assemble your 4-card deck
+│   │   │   ├── BattleScreen.jsx  # Auto-battler UI
+│   │   │   └── cardData.js       # Card catalog and battle logic
 │   │   └── components/
-│   │       ├── NodeStatus.jsx    # "You are contributing" indicator
 │   │       ├── Dashboard.jsx     # Live stats: nodes online, tasks/sec
 │   │       └── Leaderboard.jsx
 │   └── package.json
@@ -125,8 +128,7 @@ Open `http://localhost:5173`. Open a second tab — you'll see both register as 
 
 ## How the distributed compute works
 
-### Task lifecycle
-
+### Task lifecycle: Matrix Math (Chunked)
 1. A task (e.g. multiply two 1024×1024 matrices) is submitted to the server
 2. `taskQueue.js` splits it into N chunks based on connected node count
 3. Each chunk is sent to a node via `socket.emit('chunk', { taskId, chunkId, data })`
@@ -134,36 +136,45 @@ Open `http://localhost:5173`. Open a second tab — you'll see both register as 
 5. Server collects all chunks for a task, reassembles, and marks it complete
 6. Credits are awarded to each contributing node proportional to chunk size
 
+### Task lifecycle: AI Inference (Request-Parallel)
+1. A user submits a prompt to the AI assistant
+2. The server identifies an idle node that is "warm" (already has the model loaded in WebLLM)
+3. The prompt is routed to the assigned node
+4. The node's `computeWorker.js` generates the response locally using WebGPU and WebLLM, streaming tokens back to the server in real-time
+5. The server relays the streamed tokens to the requesting user
+
 ### Compute types (current)
 
 | Type | Description | Use case |
 |---|---|---|
 | `MATRIX_MULTIPLY` | Chunked matrix multiplication | Linear algebra / research baseline |
-| `INFERENCE_BATCH` | Forward pass on a tiny transformer layer | Distributed ML demo |
+| `LLM_INFERENCE` | Request-parallel LLM generation via WebLLM | Distributed AI assistant |
 | `MONTE_CARLO` | Random sampling for numerical integration | Scientific computing demo |
-
-### Credit formula(not final)
-
-```
-credits_earned = chunk_flops × difficulty_multiplier × node_reliability_score
-```
-
-Reliability score decays if a node frequently disconnects mid-task.
 
 ---
 
-## Game mechanics
+## Game mechanics: The Forge
 
-The 2D hex map is the visual layer on top of real compute activity.
+The Forge is a card battler layered on top of the real compute activity. 
 
-| Action | Cost | Effect |
-|---|---|---|
-| Claim empty tile | 50 credits | Territory expands |
-| Upgrade tile (level 1→2) | 200 credits | Tile glows, earns passive credits |
-| Fortify border | 100 credits | Slows neighbouring takeover |
-| Challenge tile | 300 credits | Contest an adjacent enemy tile |
+### Economy
+As your node processes compute tasks, you earn **Credits**. These credits can be converted into **Crystals** (100 credits = 1 Crystal) to spend in the Card Shop. 
 
-**While your node is actively computing**, your tiles pulse with a blue glow on everyone's map. Go offline, and the glow fades. This makes compute contribution immediately visible as a social signal.
+### Cards & Deck Building
+You can purchase cards of varying rarities (Common, Uncommon, Rare) and assemble a 4-card deck. Each card has:
+- **Type**: OVERCLOCK, COOLANT, or FIRMWARE
+- **Attack** & **Defense**: Used to calculate total power
+- **Cost**: Crystal price
+
+### Battles
+When you enter a battle, your 4-card deck faces off against a bot's deck in a 4-round auto-battler. The winner of each round is determined by total power (Attack + Defense), modified by type advantage.
+
+**Type Advantage (1.5x Power Multiplier):**
+- **OVERCLOCK** beats **COOLANT**
+- **COOLANT** beats **FIRMWARE**
+- **FIRMWARE** beats **OVERCLOCK**
+
+Win battles to earn Trophies and face harder bot tiers!
 
 ---
 
@@ -199,16 +210,3 @@ docs: update architecture diagram in README
 | `dev` | Integration — merge features here first |
 | `feat/*` | Individual features |
 | `fix/*` | Bug fixes |
-
----
-
-## Roadmap
-
-| Week | Milestone |
-|---|---|
-| 2 | WebSocket node registration + Web Worker compute + basic server |
-| 3 | Task queue: chunk splitting, distribution, result aggregation |
-| 4 | Auth, credit system, PostgreSQL, leaderboard API |
-| 5 | Phaser.js game map, territory mechanics, real-time updates |
-| 6 | Polish, live demo, performance dashboard, deployment |
----
