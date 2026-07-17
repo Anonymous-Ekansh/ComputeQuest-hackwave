@@ -105,7 +105,7 @@ async function saveUsers(usersData) {
           username: u.username,
           credits: u.credits,
           total_contributed: u.total_contributed || 0,
-          can_upgrade: u.can_upgrade || false
+          can_upgrade: u.can_upgrade ?? true
         })),
         { onConflict: 'id' }
       );
@@ -537,8 +537,8 @@ async function updateMoleculeLeaderboard(scoredMolecules) {
         .filter(m => m != null && typeof m.composite_score === 'number')
         .map(m => ({
           smiles: m.smiles,
-          name: m.name || null,
-          molecule_id: m.molecule_id || null,
+          molecule_name: m.name || null,
+          is_known_reference: m.is_known_reference || false,
           mw: m.mw,
           logp: m.logp,
           hbd: m.hbd,
@@ -769,7 +769,7 @@ function setupSocketHandler(io) {
               id: dbUser.id,
               username: dbUser.username,
               credits: dbUser.credits || 0,
-              can_upgrade: dbUser.can_upgrade || false
+              can_upgrade: dbUser.can_upgrade ?? true
             };
             console.log(`[auth] Google User ${dbUser.username} connected on socket ${socket.id}`);
           }

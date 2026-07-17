@@ -197,7 +197,7 @@ function App() {
           return;
         }
         addLog(`Received batch ${batch.batchId} (${batch.molecules.length} molecules)`);
-        workerManager.sendChunk(batch);
+        workerManager.sendChunk({ type: 'molecule_batch', ...batch });
       });
 
       // when the worker finishes a batch, send the result back to the server

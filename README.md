@@ -20,13 +20,13 @@ Server routes new tasks to idle nodes, aggregates results, awards credits
 Credits are converted to Crystals to buy cards and build your deck
 ```
 
-Each connected browser is a **compute node**. The server distributes heavy tasks (like matrix operations) across all online nodes in chunks, and routes full LLM inference prompts to idle, warm nodes (Request-Parallel architecture). The more you contribute, the more credits you earn — allowing you to buy rarer cards and defeat harder bot tiers.
+Each connected browser is a **compute node**. The server distributes heavy tasks (like virtual drug screening) across all online nodes in chunks, and routes full LLM inference prompts to idle, warm nodes (Request-Parallel architecture). The more you contribute, the more credits you earn — allowing you to buy rarer cards and defeat harder bot tiers.
 
 ---
 
 ## Features
 
-- **Distributed compute engine** — tasks are chunked server-side and dispatched to browser nodes via WebSocket; results are aggregated and verified automatically
+- **Distributed compute engine** — nodes receive batches of candidate drug molecules (SMILES strings), score each one for binding likelihood against a fixed real protein target using RDKit.js descriptors, and results are aggregated into a live-ranked leaderboard of top candidates.
 - **Browser-based LLM Inference** — uses WebLLM to run AI models entirely in the browser. The server routes user prompts to idle nodes, which stream the generated text back in real-time.
 - **Web Worker isolation** — all computation runs in a background thread; your UI stays completely responsive
 - **Real-time node dashboard** — see how many nodes are live, tasks/sec throughput, and your personal contribution stats
@@ -128,13 +128,14 @@ Open `http://localhost:5173`. Open a second tab — you'll see both register as 
 
 ## How the distributed compute works
 
-### Task lifecycle: Matrix Math (Chunked)
-1. A task (e.g. multiply two 1024×1024 matrices) is submitted to the server
-2. `taskQueue.js` splits it into N chunks based on connected node count
-3. Each chunk is sent to a node via `socket.emit('chunk', { taskId, chunkId, data })`
-4. The browser's `computeWorker.js` receives the chunk, computes it inside a Web Worker, and emits `socket.emit('result', { taskId, chunkId, result })`
-5. Server collects all chunks for a task, reassembles, and marks it complete
-6. Credits are awarded to each contributing node proportional to chunk size
+### Task lifecycle: Virtual Drug Screening (Chunked)
+1. The server loads a library of ~1000 candidate drug molecules and a fixed protein target.
+2. `taskQueue.js` splits the library into uniform batches (e.g. 30 molecules).
+3. A batch is dispatched to an idle node via `socket.emit('molecule_batch', { taskId, batchId, molecules, target })`.
+4. The browser's `computeWorker.js` receives the batch, parses the SMILES strings, and scores them locally via RDKit.js descriptors (MW, LogP, HBD/HBA).
+5. The node returns the scores via `socket.emit('molecule_batch_result', { taskId, batchId, results })`.
+6. The server merges the results into a global leaderboard and awards credits proportional to the batch size.
+7. The server runs a spot-check verification, randomly re-scoring one molecule per batch to ensure node honesty.
 
 ### Task lifecycle: AI Inference (Request-Parallel)
 1. A user submits a prompt to the AI assistant
@@ -147,9 +148,17 @@ Open `http://localhost:5173`. Open a second tab — you'll see both register as 
 
 | Type | Description | Use case |
 |---|---|---|
-| `MATRIX_MULTIPLY` | Chunked matrix multiplication | Linear algebra / research baseline |
+| `MOLECULE_SCREEN` | Distributed virtual drug screening via molecular descriptor scoring | Real early-stage drug discovery triage, same pattern as Folding@home / [email protected] |
 | `LLM_INFERENCE` | Request-parallel LLM generation via WebLLM | Distributed AI assistant |
 | `MONTE_CARLO` | Random sampling for numerical integration | Scientific computing demo |
+
+---
+
+## What we're screening
+
+Currently, ComputeQuest nodes are evaluating a library of ~1000 real drug-like molecules against **SARS-CoV-2 Main Protease (Mpro / 3CLpro)** (PDB: **6LU7**). 
+
+**Caveat:** This is a simplified descriptor-based scoring function (matching H-bond donors/acceptors and molecular volume to the binding pocket), not full physics-based docking. It represents a real-world high-throughput triage step designed to rapidly filter millions of compounds, but is not a final computational answer.
 
 ---
 
