@@ -142,7 +142,7 @@ export default class WorkerManager {
       return;
     }
 
-    // MATRIX_MULTIPLY chunk result — original path
+    // MOLECULE_SCREEN batch result (formerly chunk result)
     this._state = 'idle';
 
     if (this._resultCallback) {

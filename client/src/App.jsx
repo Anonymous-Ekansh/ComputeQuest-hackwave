@@ -7,6 +7,7 @@ import TheForge from './forge/TheForge';
 import Dashboard from './components/Dashboard';
 import ChatPanel from './components/ChatPanel';
 import WarmupProgress from './components/WarmupProgress';
+import ResearchPanel from './components/ResearchPanel';
 import { runDeviceBenchmark } from './benchmark';
 import './App.css';
 
@@ -15,9 +16,12 @@ const SERVER_URL = import.meta.env.VITE_SERVER_URL;
 function App() {
   const [connected, setConnected] = useState(false);
   const [nodeCount, setNodeCount] = useState(0);
-  const [tasksCompleted, setTasksCompleted] = useState(0);
-  const [lastResult, setLastResult] = useState(null);
   const [log, setLog] = useState([]);
+  
+  // Molecule screening states
+  const [screeningProgress, setScreeningProgress] = useState(null);
+  const [topMolecules, setTopMolecules] = useState([]);
+  const [targetConfig, setTargetConfig] = useState(null);
 
   const [userInfo, setUserInfo] = useState({
     username: 'Anonymous Node',
@@ -36,7 +40,6 @@ function App() {
   const [authToken, setAuthToken] = useState(localStorage.getItem('cq_auth_token') || null);
 
   // Progress states
-  const [taskProgress, setTaskProgress] = useState(null);
   const [warmProgress, setWarmProgress] = useState(null);
 
   // Benchmark states
@@ -57,6 +60,28 @@ function App() {
       });
     }
   }, [userInfo.isAuthenticated, connected, deviceBenchmark, isBenchmarking]);
+
+  // Fetch molecule leaderboard data
+  const fetchResearchData = async () => {
+    try {
+      const serverUrl = import.meta.env.VITE_SERVER_URL || SERVER_URL;
+      const res = await fetch(`${serverUrl}/api/leaderboard/molecules`);
+      if (res.ok) {
+        const data = await res.json();
+        setTopMolecules(data.topMolecules || []);
+        if (data.targetConfig) setTargetConfig(data.targetConfig);
+      }
+    } catch (err) {
+      console.error('Failed to fetch research data:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchResearchData();
+    // Re-fetch periodically
+    const interval = setInterval(fetchResearchData, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // helper to add a log entry
   function addLog(msg) {
@@ -154,46 +179,41 @@ function App() {
         setUserInfo(prev => ({ ...prev, ...info }));
       });
 
-      // listen for task:progress events
-      socket.on('task:progress', (progress) => {
-        setTaskProgress(progress);
+      // listen for screening events
+      socket.on('screening:progress', (progress) => {
+        setScreeningProgress(progress);
+      });
+      socket.on('screening:status', (status) => {
+        setScreeningProgress(status);
+        if (status.status === 'complete') {
+          addLog(`Screening run ${status.runId.slice(-6)} complete! Looping...`);
+        }
       });
 
-      // when server sends a chunk, queue it through the WorkerManager
-      socket.on('task_chunk', (chunk) => {
+      // when server sends a batch, queue it through the WorkerManager
+      socket.on('molecule_batch', (batch) => {
         if (!userInfoRef.current.isAuthenticated) {
-          console.warn('[client] Dropping chunk: unauthenticated');
+          console.warn('[client] Dropping batch: unauthenticated');
           return;
         }
-        addLog(`Received chunk ${chunk.chunkId} — rows ${chunk.startRow}–${chunk.startRow + chunk.rowCount - 1} of ${chunk.totalRows}`);
-        workerManager.sendChunk(chunk);
+        addLog(`Received batch ${batch.batchId} (${batch.molecules.length} molecules)`);
+        workerManager.sendChunk(batch);
       });
 
-      // when the worker finishes a chunk, send the result back to the server
+      // when the worker finishes a batch, send the result back to the server
       workerManager.onResult((data) => {
-        const { taskId, chunkId, resultRows, computeMs, startRow, rowCount, totalRows } = data;
-        setTasksCompleted(prev => prev + 1);
-        addLog(`Computed chunk ${chunkId} (${rowCount} rows) in ${computeMs}ms`);
+        const { taskId, batchId, results, computeMs } = data;
+        addLog(`Scored batch ${batchId} (${results.length} mols) in ${computeMs}ms`);
 
-        console.log(`%c[ComputeQuest] Chunk ${chunkId} done in ${computeMs}ms`, 'color: #818cf8; font-weight: bold;');
+        console.log(`%c[ComputeQuest] Batch ${batchId} done in ${computeMs}ms`, 'color: #818cf8; font-weight: bold;');
 
-        socket.emit('chunk_result', { taskId, chunkId, resultRows, computeMs });
-      });
-
-      // when the server has reassembled all chunks, show the full result
-      socket.on('task:complete', (data) => {
-        const { taskId, totalTimeMs, contributions } = data;
-        setLastResult({ taskId, computeTimeMs: totalTimeMs });
-        setTaskProgress(null); // clear progress
-        addLog(`Task ${taskId} complete in ${totalTimeMs}ms — ${contributions.length} node(s) contributed`);
-
-        console.log(`%c[ComputeQuest] Task ${taskId} fully assembled in ${totalTimeMs}ms`, 'color: #34d399; font-weight: bold;');
-        console.log('Contributions:', contributions);
+        socket.emit('molecule_batch_result', { taskId, batchId, results, computeMs });
+        // Trigger a quick fetch of research data so UI updates fast
+        fetchResearchData();
       });
 
       socket.on('task:failed', (data) => {
         addLog(`Task failed: ${data.reason}`);
-        setTaskProgress(null); // clear progress
       });
 
       socket.on('pipeline_end', ({ sessionId }) => {
@@ -300,16 +320,16 @@ function App() {
           {userInfo.isAuthenticated && (
             <>
               {/* Task Progress Bar */}
-              {taskProgress && (
+              {screeningProgress && (
                 <div className="progress-container">
                   <div className="progress-header">
-                    <span>Task: {taskProgress.taskId.slice(-10)}</span>
-                    <span>{taskProgress.percentComplete}%</span>
+                    <span>Molecules Screened</span>
+                    <span>{screeningProgress.percentComplete || 0}%</span>
                   </div>
                   <div className="progress-track">
                     <div
                       className="progress-fill"
-                      style={{ width: `${taskProgress.percentComplete}%` }}
+                      style={{ width: `${screeningProgress.percentComplete || 0}%` }}
                     />
                   </div>
                 </div>
@@ -317,15 +337,15 @@ function App() {
 
               <div className="stats">
                 <div className="stat-card">
-                  <div className="stat-value">{tasksCompleted}</div>
-                  <div className="stat-label">Chunks Done</div>
+                  <div className="stat-value">{screeningProgress?.moleculesScored || 0}</div>
+                  <div className="stat-label">Mols Scored</div>
                 </div>
-                {lastResult && (
-                  <div className="stat-card">
-                    <div className="stat-value">{lastResult.computeTimeMs}ms</div>
-                    <div className="stat-label">Last Time</div>
+                <div className="stat-card">
+                  <div className="stat-value">
+                    {topMolecules.length > 0 ? topMolecules[0].composite_score.toFixed(3) : '-'}
                   </div>
-                )}
+                  <div className="stat-label">Top Score</div>
+                </div>
               </div>
 
               <div className="log-container">
@@ -373,18 +393,25 @@ function App() {
       </aside>
 
       {/* ── Right Panel (Main Content) ── */}
-      <main className="main-panel" style={{ display: 'flex', flexDirection: 'row', width: '100%' }}>
-        <div style={{ flex: 1, position: 'relative' }}>
-          <TheForge
-            socket={socketRef.current}
-            userInfo={userInfo}
-            isAuthenticated={userInfo.isAuthenticated}
-          />
+      <main className="main-panel" style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+        <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0 }}>
+          <div style={{ flex: 1, position: 'relative', overflowY: 'auto' }}>
+            <TheForge
+              socket={socketRef.current}
+              userInfo={userInfo}
+              isAuthenticated={userInfo.isAuthenticated}
+            />
+          </div>
+          
+          {/* HackWave AI Chat Panel */}
+          <div style={{ width: '450px', flexShrink: 0, height: '100%', overflowY: 'auto' }}>
+            <ChatPanel socket={socketRef.current} />
+          </div>
         </div>
         
-        {/* HackWave AI Chat Panel */}
-        <div style={{ width: '450px', flexShrink: 0, height: '100%' }}>
-          <ChatPanel socket={socketRef.current} />
+        {/* Research Panel at Bottom */}
+        <div style={{ flexShrink: 0 }}>
+          <ResearchPanel topMolecules={topMolecules} targetConfig={targetConfig} />
         </div>
       </main>
     </div>

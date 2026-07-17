@@ -5,6 +5,7 @@
 // Each node performs full text generation locally and streams tokens back.
 
 import { CreateMLCEngine } from '@mlc-ai/web-llm';
+import { scoreMolecule } from './molecularScorer.js';
 
 // ── WebLLM Engine (singleton) ────────────────────────────────────────────────
 let engine = null;
@@ -45,42 +46,32 @@ const activeSessions = new Set();
 // ── Message Handler ──────────────────────────────────────────────────────────
 self.onmessage = async function (e) {
   const data = e.data;
-  const type = data.type || 'MATRIX_MULTIPLY';
-
-  // ── LEGACY MATRIX MULTIPLY ROUTE (ComputeQuest tasks) ──────────────────
-  if (type === 'MATRIX_MULTIPLY') {
-    const { taskId, chunkId, chunkData, startRow, rowCount, totalRows } = data;
-    const { rowsA, matrixB } = chunkData;
-
-    const cols = matrixB[0].length;
-    const inner = matrixB.length;
+  const type = data.type;
+  // ── MOLECULE SCREENING ROUTE (ComputeQuest tasks) ──────────────────
+  if (type === 'molecule_batch') {
+    const { taskId, batchId, molecules, target } = data;
 
     const startTime = Date.now();
+    const results = [];
 
-    const resultRows = [];
-    for (let i = 0; i < rowsA.length; i++) {
-      const row = [];
-      for (let j = 0; j < cols; j++) {
-        let sum = 0;
-        for (let k = 0; k < inner; k++) {
-          sum += rowsA[i][k] * matrixB[k][j];
-        }
-        row.push(sum);
+    // Process each molecule sequentially (RDKit WASM doesn't benefit from parallel async here)
+    for (const mol of molecules) {
+      if (mol && mol.smiles) {
+        const score = await scoreMolecule(mol.smiles, target);
+        results.push(score); // Even if it fails (null), we want to return it to maintain alignment
+      } else {
+        results.push(null);
       }
-      resultRows.push(row);
     }
 
     const computeMs = Date.now() - startTime;
 
     self.postMessage({
-      type: 'chunk_result',
+      type: 'molecule_batch_result',
       taskId,
-      chunkId,
-      resultRows,
+      batchId,
+      results,
       computeMs,
-      startRow,
-      rowCount,
-      totalRows,
     });
     return;
   }

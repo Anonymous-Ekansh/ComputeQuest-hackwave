@@ -896,6 +896,7 @@ function setupSocketHandler(io) {
             ...r,
             name: origMol ? origMol.name : undefined,
             molecule_id: origMol ? origMol.id : undefined,
+            is_known_reference: origMol ? origMol.is_known_reference : undefined,
           };
         });
         updateMoleculeLeaderboard(enrichedResults).catch(err => {

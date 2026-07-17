@@ -44,6 +44,26 @@ app.get('/api/leaderboard', async (req, res) => {
   }
 });
 
+app.get('/api/leaderboard/molecules', async (req, res) => {
+  try {
+    const { getMoleculeLeaderboard } = require('./socketHandler');
+    const topMolecules = getMoleculeLeaderboard();
+    
+    // Also include targetConfig so we don't need a separate endpoint
+    const fs = require('fs');
+    const path = require('path');
+    let targetConfig = {};
+    try {
+      targetConfig = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'target.json'), 'utf-8'));
+    } catch (e) {}
+
+    res.json({ topMolecules, targetConfig });
+  } catch (err) {
+    console.error('Molecule leaderboard fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch molecule leaderboard' });
+  }
+});
+
 app.get('/api/leaderboard/forgemasters', async (req, res) => {
   try {
     const leaderboard = await getForgemasterLeaderboard();

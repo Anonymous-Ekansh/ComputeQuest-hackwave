@@ -1,0 +1,72 @@
+.research-panel {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 20px 20px 0 20px;
+  color: var(--color-text);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.research-header h3 {
+  margin: 0 0 8px 0;
+  color: var(--color-primary);
+  font-size: 1.25rem;
+}
+
+.explainer {
+  font-size: 0.95rem;
+  color: var(--color-text-dim);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.research-leaderboard h4 {
+  margin: 0 0 12px 0;
+  font-size: 1.1rem;
+}
+
+.table-responsive {
+  overflow-x: auto;
+}
+
+.research-leaderboard table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.research-leaderboard th,
+.research-leaderboard td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.research-leaderboard th {
+  background-color: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+  color: var(--color-text-dim);
+}
+
+.research-leaderboard tr:last-child td {
+  border-bottom: none;
+}
+
+.mol-name {
+  font-weight: 500;
+}
+
+.reference-row td {
+  background-color: rgba(16, 185, 129, 0.1); /* Soft emerald tint */
+}
+
+.reference-badge {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  background-color: var(--color-success);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: bold;
+}
