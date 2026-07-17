@@ -1,0 +1,55 @@
+{
+  "_comment": [
+    "Static target configuration for SARS-CoV-2 main protease (Mpro / 3CLpro).",
+    "PDB entry 6LU7: crystal structure of Mpro in complex with inhibitor N3.",
+    "Resolution: 2.16 Å. The active site sits at the cleft between domains I and II.",
+    "",
+    "Value sources and accuracy notes:",
+    "  - pocket_volume_estimate_A3: ~340 Å³ is a simplified estimate derived from",
+    "    computational pocket-detection tools (fpocket / SiteMap) applied to 6LU7.",
+    "    Published estimates for the Mpro active site range from ~300–420 Å³ depending",
+    "    on the probe radius and whether subsites S1–S4 are fully included.",
+    "  - pocket_hydrophobicity_score: 0.58 is an approximate aggregate score.",
+    "    The S2 and S4 subsites are predominantly hydrophobic (Leu27, Met49, Met165,",
+    "    Leu167, Pro168, Ala191), while S1 and S1' are more polar (His163, Glu166,",
+    "    Cys145, His41). Overall character is mixed-to-moderately-hydrophobic.",
+    "  - pocket_hbond_donor_count: 9 donors are approximate — counting accessible",
+    "    backbone NH and side-chain donors from Gly143, Ser144, Cys145, His163,",
+    "    His164, Glu166 (backbone), Gln189, Thr190, and the catalytic His41.",
+    "  - pocket_hbond_acceptor_count: 14 acceptors are approximate — counting",
+    "    backbone C=O and side-chain acceptors from His41, Phe140 (backbone),",
+    "    Leu141 (backbone), Asn142, Gly143 (backbone), Ser144, Cys145, His163,",
+    "    His164, Met165 (backbone), Glu166 (side-chain COO⁻ × 2 + backbone),",
+    "    Gln189 (side-chain), Thr190.",
+    "  - key_residues: the catalytic dyad and subsites directly involved in",
+    "    inhibitor recognition in the 6LU7 co-crystal structure.",
+    "",
+    "All numerical values are simplified for use in a lightweight scoring function",
+    "and should NOT be treated as publication-grade structural data."
+  ],
+
+  "target_name": "SARS-CoV-2 Main Protease (Mpro / 3CLpro)",
+  "pdb_id": "6LU7",
+  "organism": "Severe acute respiratory syndrome coronavirus 2",
+  "uniprot_id": "P0DTD1",
+  "resolution_angstrom": 2.16,
+
+  "pocket_volume_estimate_A3": 340,
+  "pocket_hydrophobicity_score": 0.58,
+  "pocket_hbond_donor_count": 9,
+  "pocket_hbond_acceptor_count": 14,
+
+  "description": "The active site of SARS-CoV-2 Mpro is located in the cleft between catalytic domains I (residues 8-101) and II (residues 102-184). It features a Cys145-His41 catalytic dyad and four substrate-recognition subsites (S1, S1', S2, S4). The S1 subsite is defined by His163, Glu166, and Phe140 and confers selectivity for Gln at the P1 position of the polyprotein substrate. The S2 subsite is a deep hydrophobic pocket lined by Met49, Met165, and Leu167, accommodating Leu/Phe at P2. The co-crystallized inhibitor N3 is a Michael acceptor that covalently modifies Cys145.",
+
+  "key_residues": {
+    "catalytic_dyad": ["His41", "Cys145"],
+    "oxyanion_hole": ["Gly143", "Ser144", "Cys145"],
+    "S1_subsite": ["Phe140", "Leu141", "Asn142", "His163", "Glu166", "His172"],
+    "S1_prime_subsite": ["His41", "Gly143", "Cys145"],
+    "S2_subsite": ["His41", "Met49", "Tyr54", "Met165", "Asp187", "Arg188"],
+    "S4_subsite": ["Leu167", "Pro168", "Thr190", "Ala191", "Gln192"]
+  },
+
+  "preferred_molecular_weight_range_Da": [150, 500],
+  "preferred_logP_range": [-0.5, 4.5]
+}
