@@ -15,7 +15,7 @@ import {
 // sessionId -> { device, embedding, layers: [ { weights, kvCache } ], finalHead }
 const pipelineSessions = new Map();
 
-const MODEL_BASE_URL = import.meta.env.VITE_MODEL_URL || 'http://localhost:3001/models';
+const MODEL_BASE_URL = import.meta.env.VITE_MODEL_URL || 'https://huggingface.co/datasets/iamekansh/hackwave/resolve/main';
 
 async function readBin(filename, size_bytes = 0) {
   const timeoutMs = Math.max(20000, ((size_bytes / 1000000) * 1000) + 15000);
