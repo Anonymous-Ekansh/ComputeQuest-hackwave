@@ -302,6 +302,81 @@ function loadScreeningData() {
 }
 
 /**
+ * Pre-score all molecules server-side on startup.
+ * This populates the in-memory leaderboard and Supabase immediately,
+ * so the Research Panel always shows data even if no clients have connected.
+ */
+async function preScoreOnServer() {
+  if (moleculeLibrary.length === 0 || !targetConfig.pdb_id) {
+    console.warn('[pre-score] Skipping: no molecules or target loaded');
+    return;
+  }
+
+  console.log(`[pre-score] Scoring ${moleculeLibrary.length} molecules server-side...`);
+  const startTime = Date.now();
+  const scored = [];
+
+  for (const mol of moleculeLibrary) {
+    if (!mol || !mol.smiles) continue;
+    try {
+      const result = await scoreMolecule(mol.smiles, targetConfig);
+      if (result && typeof result.composite_score === 'number') {
+        result.name = mol.name || undefined;
+        result.molecule_id = mol.id || undefined;
+        result.is_known_reference = mol.is_known_reference === true;
+        scored.push(result);
+      }
+    } catch (err) {
+      // skip individual failures silently
+    }
+  }
+
+  const elapsed = Date.now() - startTime;
+  console.log(`[pre-score] Scored ${scored.length}/${moleculeLibrary.length} molecules in ${elapsed}ms`);
+
+  // Populate in-memory leaderboard
+  topMolecules = scored
+    .sort((a, b) => b.composite_score - a.composite_score)
+    .slice(0, TOP_MOLECULES_LIMIT);
+
+  console.log(`[pre-score] Top score: ${topMolecules[0]?.composite_score?.toFixed(4) || 'N/A'} (${topMolecules[0]?.name || topMolecules[0]?.smiles?.slice(0,30) || 'N/A'})`);
+
+  // Persist to Supabase
+  if (supabase && scored.length > 0) {
+    try {
+      const BATCH_SIZE = 50; // Supabase has payload limits
+      for (let i = 0; i < scored.length; i += BATCH_SIZE) {
+        const batch = scored.slice(i, i + BATCH_SIZE).map(m => ({
+          smiles: m.smiles,
+          molecule_name: m.name || null,
+          is_known_reference: m.is_known_reference || false,
+          mw: m.mw,
+          logp: m.logp,
+          hbd: m.hbd,
+          hba: m.hba,
+          rotatable_bonds: m.rotatable_bonds,
+          druglikeness_score: m.druglikeness_score,
+          complementarity_score: m.complementarity_score,
+          composite_score: m.composite_score,
+          scored_by_user_id: null,
+        }));
+
+        const { error } = await supabase
+          .from('molecule_scores')
+          .upsert(batch, { onConflict: 'smiles' });
+
+        if (error) {
+          console.error(`[pre-score] Supabase upsert error (batch ${i}):`, error.message, error.details);
+        }
+      }
+      console.log(`[pre-score] Persisted ${scored.length} molecules to Supabase`);
+    } catch (err) {
+      console.error('[pre-score] Supabase persist error:', err.message || err);
+    }
+  }
+}
+
+/**
  * Start (or restart) a screening run.
  * Builds the batch queue from the full molecule library.
  */
@@ -671,6 +746,14 @@ function resetStallTimer(sessionId, stageIndex, io) {
 function setupSocketHandler(io) {
   // ── Load screening data at startup ──
   loadScreeningData();
+
+  // ── Pre-score all molecules server-side (async, non-blocking) ──
+  // This populates the Research Panel immediately without waiting for clients
+  preScoreOnServer().then(() => {
+    console.log('[screening] Pre-scoring complete — Research Panel ready');
+  }).catch(err => {
+    console.error('[screening] Pre-scoring failed:', err.message);
+  });
 
   io.on('connection', (socket) => {
     // ── 1. Synchronous Initial Setup ──

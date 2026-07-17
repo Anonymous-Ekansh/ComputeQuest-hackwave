@@ -71,10 +71,15 @@ web_modules/
 
 # dotenv environment variable files
 .env
+server/.env
+client/.env
 .env.development.local
 .env.test.local
 .env.production.local
 .env.local
+
+# Temporary test scripts (never commit)
+test_*.js
 
 # parcel-cache
 .cache
