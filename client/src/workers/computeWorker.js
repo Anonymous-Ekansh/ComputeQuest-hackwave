@@ -147,24 +147,19 @@ async function readBin(filename, size_bytes = 0, onChunk = null) {
         return await res.arrayBuffer();
       }
 
+      // Stream chunks for progress reporting, then reassemble via Blob
+      // to guarantee byte-identical output to res.arrayBuffer()
       const reader = res.body.getReader();
       const chunks = [];
-      let loaded = 0;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(value);
-        loaded += value.length;
         onChunk(value.length);
       }
       
-      const out = new Uint8Array(loaded);
-      let offset = 0;
-      for (const chunk of chunks) {
-        out.set(chunk, offset);
-        offset += chunk.length;
-      }
-      return out.buffer;
+      const blob = new Blob(chunks);
+      return await blob.arrayBuffer();
     } catch (err) {
       clearTimeout(timerId);
       lastErr = err;
@@ -333,6 +328,7 @@ self.onmessage = async function (e) {
         }
         
         const generatedTokenId = maxIdx;
+        console.log(`[Worker] Token generated: id=${generatedTokenId}, maxLogit=${maxVal.toFixed(4)}, logits[0]=${logits[0]?.toFixed(4)}, logits[1]=${logits[1]?.toFixed(4)}, logits sample=[${Array.from(logits.slice(0, 5)).map(v => v.toFixed(3)).join(', ')}]`);
 
         self.postMessage({
           type: 'forward_response',
