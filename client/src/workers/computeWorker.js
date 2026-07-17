@@ -17,11 +17,28 @@ const pipelineSessions = new Map();
 
 const MODEL_BASE_URL = import.meta.env.VITE_MODEL_URL || 'http://localhost:3001/models';
 
-// Helper to fetch binaries from the server
-async function readBin(filename) {
-  const res = await fetch(`${MODEL_BASE_URL}/${filename}`);
-  if (!res.ok) throw new Error(`Failed to load ${filename}`);
-  return await res.arrayBuffer();
+async function readBin(filename, size_bytes = 0) {
+  const timeoutMs = Math.max(20000, ((size_bytes / 1000000) * 1000) + 15000);
+  let attempt = 0;
+  let lastErr = null;
+  while (attempt < 2) {
+    attempt++;
+    const controller = new AbortController();
+    const timerId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${MODEL_BASE_URL}/${filename}`, { signal: controller.signal });
+      clearTimeout(timerId);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.arrayBuffer();
+    } catch (err) {
+      clearTimeout(timerId);
+      lastErr = err;
+      if (attempt < 2) {
+        console.warn(`[Worker] Retrying ${filename} (attempt ${attempt + 1})...`);
+      }
+    }
+  }
+  throw new Error(`Failed to load ${filename} after 2 attempts: ${lastErr.message}`);
 }
 
 self.onmessage = async function (e) {
@@ -75,17 +92,25 @@ self.onmessage = async function (e) {
       const adapter = await navigator.gpu.requestAdapter();
       const device = await adapter.requestDevice();
 
-      const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`);
-      const rawManifest = await manifestRes.json();
+      const manifestController = new AbortController();
+      const manifestTimer = setTimeout(() => manifestController.abort(), 15000);
+      let rawManifest;
+      try {
+        const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`, { signal: manifestController.signal });
+        if (!manifestRes.ok) throw new Error(`HTTP ${manifestRes.status}`);
+        rawManifest = await manifestRes.json();
+      } finally {
+        clearTimeout(manifestTimer);
+      }
       const files = rawManifest.files;  // array of { filename, tensors, size_bytes, ... }
       const vocabSize = rawManifest.vocab_size || 32000;
 
-      // Helper: find a file entry by filename and return its tensors array
-      const getTensors = (fname) => {
+      // Helper: find a file entry by filename
+      const getFileEntry = (fname) => {
         const entry = files.find(f => f.filename === fname);
         if (!entry) throw new Error(`File not found in manifest: ${fname}`);
         console.log(`[Worker] Loaded ${fname}: ${entry.tensors.length} tensors`);
-        return entry.tensors;
+        return entry;
       };
 
       const sessionData = {
@@ -99,29 +124,32 @@ self.onmessage = async function (e) {
       };
 
       if (role === 'embedding' || role === 'all') {
-        const embedTensors = getTensors('embedding.bin');
-        const embedBuf = await readBin('embedding.bin');
-        sessionData.embedding = loadEmbeddingWeights(device, embedBuf, embedTensors);
+        const entry = getFileEntry('embedding.bin');
+        self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading embedding.bin…` });
+        const embedBuf = await readBin('embedding.bin', entry.size_bytes);
+        sessionData.embedding = loadEmbeddingWeights(device, embedBuf, entry.tensors);
       }
 
       for (let i = layerRange[0]; i <= layerRange[1]; i++) {
         const layerFile = `layers/layer_${i.toString().padStart(2, '0')}.bin`;
-        const layerTensors = getTensors(layerFile);
-        const lBuf = await readBin(layerFile);
+        const entry = getFileEntry(layerFile);
+        self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading ${layerFile}…` });
+        const lBuf = await readBin(layerFile, entry.size_bytes);
         
         // Initial empty kvCache for this layer
         const kvCache = { length: 0 };
 
         sessionData.layers.push({
-          weights: loadLayerWeights(device, lBuf, layerTensors),
+          weights: loadLayerWeights(device, lBuf, entry.tensors),
           kvCache
         });
       }
 
       if (role === 'lm_head' || role === 'all') {
-        const finalTensors = getTensors('final_head.bin');
-        const finalBuf = await readBin('final_head.bin');
-        sessionData.finalHead = loadFinalHeadWeights(device, finalBuf, finalTensors);
+        const entry = getFileEntry('final_head.bin');
+        self.postMessage({ type: 'stage_progress', sessionId, detail: `Downloading final_head.bin…` });
+        const finalBuf = await readBin('final_head.bin', entry.size_bytes);
+        sessionData.finalHead = loadFinalHeadWeights(device, finalBuf, entry.tensors);
       }
 
       pipelineSessions.set(sessionId, sessionData);

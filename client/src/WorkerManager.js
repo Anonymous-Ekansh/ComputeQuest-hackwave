@@ -133,7 +133,7 @@ export default class WorkerManager {
   /** @private Handle a successful result from the worker. */
   _onMessage(e) {
     const data = e.data;
-    const pipelineTypes = ['stage_ready', 'forward_response', 'stage_error'];
+    const pipelineTypes = ['stage_ready', 'forward_response', 'stage_error', 'stage_progress'];
 
     if (data && data.type && pipelineTypes.includes(data.type)) {
       // Pipeline message — don't touch chunk state

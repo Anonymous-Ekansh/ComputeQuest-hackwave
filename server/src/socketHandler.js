@@ -1464,10 +1464,11 @@ function setupSocketHandler(io) {
             const targetSocket = io.sockets.sockets.get(nodeId);
             if (!targetSocket) return reject(new Error('Node missing'));
 
+            const timeoutMs = process.env.SHARD_LOAD_TIMEOUT_MS ? parseInt(process.env.SHARD_LOAD_TIMEOUT_MS, 10) : 180000;
             const timer = setTimeout(() => {
               targetSocket.removeAllListeners('stage_ready'); // clean up this promise's listener if timeout
               reject(new Error('Shard loading timeout'));
-            }, 240000); // 30 seconds
+            }, timeoutMs);
 
             const onStageReady = (data) => {
               if (data.sessionId === sessionId) {

@@ -209,7 +209,14 @@ function App() {
 
       // ── INFERENCE PIPELINE: worker → socket bridge ──────────────────────
       workerManager.onPipelineMessage((msg) => {
-        if (msg.type === 'forward_response') {
+        if (msg.type === 'stage_progress') {
+          addLog(msg.detail);
+        } else if (msg.type === 'stage_ready') {
+          socket.emit('stage_ready', {
+            sessionId: msg.sessionId,
+            stageIndex: msg.stageIndex
+          });
+        } else if (msg.type === 'forward_response') {
           socket.emit('forward_response', {
             sessionId: msg.sessionId,
             stageIndex: msg.stageIndex,
