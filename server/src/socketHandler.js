@@ -767,7 +767,7 @@ function resetStallTimer(sessionId, stageIndex, io) {
   session.stallTimer = setTimeout(() => {
     console.warn(`[pipeline] Session ${sessionId} stalled at stage ${stageIndex}`);
     abortPipelineSession(sessionId, io, 'A pipeline stage stalled — aborting.');
-  }, 60000); // 60 seconds
+  }, 120000); // 120 seconds — generous for WebLLM first-token latency
 }
 
 // ── socket setup ─────────────────────────────────────────────────────────────
@@ -1550,13 +1550,13 @@ function setupSocketHandler(io) {
         stage0Socket.emit('forward_request', {
           sessionId,
           stageIndex: 0,
-          tokenIndex: tokenIds
+          prompt: prompt
         });
         io.emit('pipeline_progress', { sessionId, stageIndex: 0 });
       }
     });
 
-    socket.on('forward_response', ({ sessionId, stageIndex, tokenId }) => {
+    socket.on('forward_response', ({ sessionId, stageIndex, tokenId, tokenText, isComplete }) => {
       const session = activePipelines.get(sessionId);
       if (!session) return;
 
@@ -1565,32 +1565,40 @@ function setupSocketHandler(io) {
         session.stallTimer = null;
       }
 
-      let tokenizer;
-      try {
-        tokenizer = getTokenizer();
-      } catch (err) {
-        console.error('[pipeline] Tokenizer unavailable during decoding:', err);
-        abortPipelineSession(sessionId, io, 'Tokenizer unavailable on server.');
+      // If generation is complete (WebLLM signals end)
+      if (isComplete) {
+        io.emit('pipeline_end', { sessionId });
+        finishPipelineSession(sessionId, io);
         return;
       }
 
-      let tokenText = '';
-      if (tokenId !== undefined) {
-        tokenText = tokenizer.decode([tokenId]);
+      // Resolve token text: use tokenText directly if provided (WebLLM),
+      // otherwise decode tokenId via server tokenizer (legacy)
+      let resolvedText = tokenText || '';
+      if (!resolvedText && tokenId !== undefined) {
+        try {
+          const tokenizer = getTokenizer();
+          resolvedText = tokenizer.decode([tokenId]);
+          // Check for EOS in legacy mode
+          if (tokenId === tokenizer.eosId) {
+            io.emit('pipeline_end', { sessionId });
+            finishPipelineSession(sessionId, io);
+            return;
+          }
+        } catch (err) {
+          console.error('[pipeline] Tokenizer unavailable during decoding:', err);
+          abortPipelineSession(sessionId, io, 'Tokenizer unavailable on server.');
+          return;
+        }
       }
 
       const clientSocket = io.sockets.sockets.get(session.clientSocketId);
       if (clientSocket) {
-        clientSocket.emit('final_token', { sessionId, tokenId, tokenText });
+        clientSocket.emit('final_token', { sessionId, tokenText: resolvedText });
       }
 
-      if (tokenId === tokenizer.eosId) {
-        io.emit('pipeline_end', { sessionId });
-        finishPipelineSession(sessionId, io);
-      } else {
-        // Reset stall timer for the next streamed token
-        resetStallTimer(sessionId, 0, io);
-      }
+      // Reset stall timer for the next streamed token
+      resetStallTimer(sessionId, 0, io);
     });
 
     socket.on('pipeline_client_error', ({ sessionId, reason }) => {

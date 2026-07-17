@@ -1,182 +1,54 @@
-// Web Worker for distributed matrix multiplication & Inference Pipeline
+// Web Worker for distributed matrix multiplication & AI Inference via WebLLM
+// 
+// Architecture: Each browser tab loads the full TinyLlama model via WebLLM.
+// The server routes user prompts to idle (preferably warm) nodes.
+// Each node performs full text generation locally and streams tokens back.
 
-import {
-  runEmbedding,
-  runDecoderLayer,
-  runFinalHead,
-  loadEmbeddingWeights,
-  loadLayerWeights,
-  loadFinalHeadWeights,
-  uploadBuf,
-  readBuffer
-} from '../llm/webgpu-kernels.js';
+import { CreateMLCEngine } from '@mlc-ai/web-llm';
 
-console.log('[Worker] Booting up...');
-let cachedModel = null;
-let loadingPromise = null;
+// ── WebLLM Engine (singleton) ────────────────────────────────────────────────
+let engine = null;
+let enginePromise = null;
 
-async function ensureModelLoaded(onProgress) {
-  if (cachedModel) {
-    console.log('[Worker] Returning cached model, skipping fetch.');
-    return cachedModel;
-  }
-  if (loadingPromise) {
-    console.log('[Worker] Already loading, returning existing promise.');
-    return loadingPromise;
-  }
+const MODEL_ID = 'TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC';
 
-  console.log('[Worker] Cache miss. Starting model fetch...');
-  loadingPromise = (async () => {
+async function ensureEngine(onProgress) {
+  if (engine) return engine;
+  if (enginePromise) return enginePromise;
+
+  console.log('[Worker] Initializing WebLLM engine...');
+  enginePromise = (async () => {
     try {
-      const adapter = await navigator.gpu.requestAdapter();
-      const device = await adapter.requestDevice();
-
-      const manifestController = new AbortController();
-      const manifestTimer = setTimeout(() => manifestController.abort(), 15000);
-      let rawManifest;
-      try {
-        const manifestRes = await fetch(`${MODEL_BASE_URL}/manifest.json`, { signal: manifestController.signal });
-        if (!manifestRes.ok) throw new Error(`HTTP ${manifestRes.status}`);
-        rawManifest = await manifestRes.json();
-      } finally {
-        clearTimeout(manifestTimer);
-      }
-      const files = rawManifest.files;
-      const vocabSize = rawManifest.vocab_size || 32000;
-
-      let totalBytes = 0;
-      for (const f of files) {
-        totalBytes += f.size_bytes;
-      }
-      
-      let loadedBytes = 0;
-      const getFileEntry = (fname) => {
-        const entry = files.find(f => f.filename === fname);
-        if (!entry) throw new Error(`File not found in manifest: ${fname}`);
-        return entry;
-      };
-
-      const loadFile = async (fname, entry) => {
-        const buf = await readBin(fname, entry.size_bytes, (chunkSize) => {
-          loadedBytes += chunkSize;
+      const eng = await CreateMLCEngine(MODEL_ID, {
+        initProgressCallback: (report) => {
           if (onProgress) {
-            onProgress(loadedBytes, totalBytes, `Downloading weights...`);
+            onProgress(report);
           }
-        });
-        return buf;
-      };
-
-      const model = {
-        device,
-        embedding: null,
-        layers: [],
-        finalHead: null,
-        vocabSize
-      };
-
-      const embedEntry = getFileEntry('embedding.bin');
-      const headEntry = getFileEntry('final_head.bin');
-      const layerEntries = [];
-      for (let i = 0; i <= 21; i++) {
-        const fname = `layers/layer_${i.toString().padStart(2, '0')}.bin`;
-        layerEntries.push({ fname, i, entry: getFileEntry(fname) });
-      }
-
-      const allPromises = [];
-      
-      const pEmbed = loadFile('embedding.bin', embedEntry).then(buf => {
-        model.embedding = loadEmbeddingWeights(device, buf, embedEntry.tensors);
+        }
       });
-      allPromises.push(pEmbed);
-
-      const pHead = loadFile('final_head.bin', headEntry).then(buf => {
-        model.finalHead = loadFinalHeadWeights(device, buf, headEntry.tensors);
-      });
-      allPromises.push(pHead);
-
-      const layerResults = [];
-      for (const { fname, i, entry } of layerEntries) {
-        const pLayer = loadFile(fname, entry).then(buf => {
-          layerResults.push({ i, buf, entry });
-        });
-        allPromises.push(pLayer);
-      }
-
-      await Promise.all(allPromises);
-
-      layerResults.sort((a, b) => a.i - b.i);
-      for (const res of layerResults) {
-        model.layers.push({
-          weights: loadLayerWeights(device, res.buf, res.entry.tensors)
-        });
-      }
-
-      cachedModel = model;
-      loadingPromise = null;
-      return model;
+      engine = eng;
+      enginePromise = null;
+      console.log('[Worker] WebLLM engine ready.');
+      return eng;
     } catch (err) {
-      loadingPromise = null;
+      enginePromise = null;
       throw err;
     }
   })();
 
-  return loadingPromise;
+  return enginePromise;
 }
 
-// Pipeline State
-// sessionId -> { kvCaches: [] }
-const pipelineSessions = new Map();
+// ── Active generation sessions (to support cancellation) ─────────────────────
+const activeSessions = new Set();
 
-const MODEL_BASE_URL = import.meta.env.VITE_MODEL_URL || 'https://huggingface.co/datasets/iamekansh/hackwave/resolve/main';
-
-async function readBin(filename, size_bytes = 0, onChunk = null) {
-  // Use a very large timeout since we are parallelizing 24 requests over potentially slow connections
-  const timeoutMs = 1800000; // 30 minutes
-  let attempt = 0;
-  let lastErr = null;
-  while (attempt < 2) {
-    attempt++;
-    const controller = new AbortController();
-    const timerId = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(`${MODEL_BASE_URL}/${filename}`, { signal: controller.signal });
-      clearTimeout(timerId);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      
-      if (!onChunk) {
-        return await res.arrayBuffer();
-      }
-
-      // Stream chunks for progress reporting, then reassemble via Blob
-      // to guarantee byte-identical output to res.arrayBuffer()
-      const reader = res.body.getReader();
-      const chunks = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        onChunk(value.length);
-      }
-      
-      const blob = new Blob(chunks);
-      return await blob.arrayBuffer();
-    } catch (err) {
-      clearTimeout(timerId);
-      lastErr = err;
-      if (attempt < 2) {
-        console.warn(`[Worker] Retrying ${filename} (attempt ${attempt + 1})...`);
-      }
-    }
-  }
-  throw new Error(`Failed to load ${filename} after 2 attempts: ${lastErr.message}`);
-}
-
+// ── Message Handler ──────────────────────────────────────────────────────────
 self.onmessage = async function (e) {
   const data = e.data;
   const type = data.type || 'MATRIX_MULTIPLY';
 
+  // ── LEGACY MATRIX MULTIPLY ROUTE (ComputeQuest tasks) ──────────────────
   if (type === 'MATRIX_MULTIPLY') {
-    // ── LEGACY MATRIX MULTIPLY ROUTE ──
     const { taskId, chunkId, chunkData, startRow, rowCount, totalRows } = data;
     const { rowsA, matrixB } = chunkData;
 
@@ -213,164 +85,121 @@ self.onmessage = async function (e) {
     return;
   }
 
-    if (type === 'start_background_warmup') {
-      if (cachedModel) {
-        self.postMessage({ type: 'node_warm_ready' });
-        return;
-      }
-      
-      ensureModelLoaded((loadedBytes, totalBytes, label) => {
-        const percentComplete = Math.round((loadedBytes / totalBytes) * 100);
-        self.postMessage({ 
-          type: 'node_warm_progress', 
-          percent: percentComplete,
-          loadedBytes,
-          totalBytes,
-          label
-        });
-      }).then(() => {
-        self.postMessage({ type: 'node_warm_ready' });
-      }).catch(err => {
-        console.error("[Worker] Background warmup failed:", err);
-      });
+  // ── BACKGROUND WARMUP ──────────────────────────────────────────────────
+  if (type === 'start_background_warmup') {
+    if (engine) {
+      self.postMessage({ type: 'node_warm_ready' });
       return;
     }
 
-  if (type === 'stage_assign') {
-    // ── PIPELINE INITIALIZATION ──
-    try {
-      const { sessionId, stageIndex, layerRange, role } = data; // role='all', layerRange=[0, 21]
-      
-      if (!navigator.gpu) throw new Error("WebGPU not supported");
+    ensureEngine((report) => {
+      const percent = Math.round(report.progress * 100);
+      self.postMessage({
+        type: 'node_warm_progress',
+        percent,
+        loadedBytes: 0,
+        totalBytes: 0,
+        label: report.text || 'Loading model...'
+      });
+    }).then(() => {
+      self.postMessage({ type: 'node_warm_ready' });
+    }).catch(err => {
+      console.error('[Worker] Background warmup failed:', err);
+    });
+    return;
+  }
 
-      // Load model globally once
-      await ensureModelLoaded((loadedBytes, totalBytes, label) => {
-        const percentComplete = Math.round((loadedBytes / totalBytes) * 100);
-        self.postMessage({ 
-          type: 'node_warm_progress', 
-          percent: percentComplete,
-          loadedBytes,
-          totalBytes,
-          label
+  // ── PIPELINE INITIALIZATION (stage_assign) ─────────────────────────────
+  if (type === 'stage_assign') {
+    const { sessionId, stageIndex } = data;
+    try {
+      if (!navigator.gpu) throw new Error('WebGPU not supported');
+
+      await ensureEngine((report) => {
+        const percent = Math.round(report.progress * 100);
+        self.postMessage({
+          type: 'node_warm_progress',
+          percent,
+          loadedBytes: 0,
+          totalBytes: 0,
+          label: report.text || 'Loading model...'
         });
       });
-      
+
       self.postMessage({ type: 'node_warm_ready' });
-
-      // Initialize KV caches for this session
-      const sessionData = {
-        kvCaches: cachedModel.layers.map(() => ({ length: 0 }))
-      };
-      pipelineSessions.set(sessionId, sessionData);
-
-      self.postMessage({
-        type: 'stage_ready',
-        sessionId,
-        stageIndex
-      });
+      self.postMessage({ type: 'stage_ready', sessionId, stageIndex });
     } catch (err) {
-      console.error("[Worker] Pipeline Init Error:", err);
-      self.postMessage({
-        type: 'stage_error',
-        sessionId: data.sessionId,
-        error: err.message
-      });
+      console.error('[Worker] Pipeline init error:', err);
+      self.postMessage({ type: 'stage_error', sessionId, error: err.message });
     }
     return;
   }
 
+  // ── TEXT GENERATION (forward_request) ───────────────────────────────────
   if (type === 'forward_request') {
-    // ── REQUEST-PARALLEL COMPUTE PASS ──
+    const { sessionId, prompt } = data;
+    activeSessions.add(sessionId);
+
     try {
-      const { sessionId, tokenIndex } = data;
-      const session = pipelineSessions.get(sessionId);
-      if (!session) throw new Error("Unknown session");
+      const eng = await ensureEngine();
 
-      const { device, vocabSize, embedding, layers, finalHead } = cachedModel;
-      
-      let positionId = 0;
-      let currentTokens = Array.isArray(tokenIndex) ? tokenIndex : [tokenIndex];
-      let isGenerating = true;
+      // Reset chat so each prompt is independent
+      await eng.resetChat();
 
-      while (isGenerating) {
-        // Yield to event loop to process clear_session messages
-        await new Promise(r => setTimeout(r, 0));
-        if (!pipelineSessions.has(sessionId)) break;
+      const stream = await eng.chat.completions.create({
+        messages: [
+          { role: 'system', content: 'You are a helpful AI assistant.' },
+          { role: 'user', content: prompt }
+        ],
+        stream: true,
+        max_tokens: 256,
+        temperature: 0.7,
+        top_p: 0.9
+      });
 
-        const seqLen = currentTokens.length;
-        let currentStateBuf = runEmbedding(device, embedding, currentTokens, vocabSize);
+      for await (const chunk of stream) {
+        // Check if session was cancelled
+        if (!activeSessions.has(sessionId)) break;
 
-        for (let i = 0; i < layers.length; i++) {
-          const layer = layers[i];
-          const kvCache = session.kvCaches[i];
-          const res = runDecoderLayer(device, layer.weights, currentStateBuf, seqLen, kvCache, positionId);
-          
-          currentStateBuf.destroy(); // Always destroy since it's the result of runEmbedding or previous runDecoderLayer
-          
-          currentStateBuf = res.hiddenStates;
-          session.kvCaches[i] = res.kvCache;
+        const text = chunk.choices[0]?.delta?.content || '';
+        if (text) {
+          self.postMessage({
+            type: 'forward_response',
+            sessionId,
+            tokenText: text
+          });
         }
+      }
 
-        const logitsBuf = runFinalHead(device, finalHead, currentStateBuf, seqLen, vocabSize);
-        
-        // Fix Bug 3: readBuffer out-of-bounds crash
-        const logits = await readBuffer(device, logitsBuf, vocabSize);
-        logitsBuf.destroy();
-        currentStateBuf.destroy();
-        
-        let maxVal = -Infinity;
-        let maxIdx = 0;
-        for (let i = 0; i < vocabSize; i++) {
-          if (logits[i] > maxVal) {
-            maxVal = logits[i];
-            maxIdx = i;
-          }
-        }
-        
-        const generatedTokenId = maxIdx;
-        console.log(`[Worker] Token generated: id=${generatedTokenId}, maxLogit=${maxVal.toFixed(4)}, logits[0]=${logits[0]?.toFixed(4)}, logits[1]=${logits[1]?.toFixed(4)}, logits sample=[${Array.from(logits.slice(0, 5)).map(v => v.toFixed(3)).join(', ')}]`);
-
+      // Signal generation complete
+      if (activeSessions.has(sessionId)) {
         self.postMessage({
           type: 'forward_response',
           sessionId,
-          stageIndex: 0,
-          tokenId: generatedTokenId
+          tokenText: '',
+          isComplete: true
         });
-
-        positionId += seqLen;
-        currentTokens = [generatedTokenId];
-
-        // Break if we hit EOS or if we generate too many tokens as a safeguard
-        if (generatedTokenId === 2) {
-          isGenerating = false;
-        }
       }
 
+      activeSessions.delete(sessionId);
     } catch (err) {
-      console.error("[Worker] Forward pass error:", err);
+      console.error('[Worker] Generation error:', err);
+      activeSessions.delete(sessionId);
       self.postMessage({
         type: 'stage_error',
-        sessionId: data.sessionId,
+        sessionId,
         error: err.message
       });
     }
     return;
   }
 
+  // ── SESSION CLEANUP ────────────────────────────────────────────────────
   if (type === 'clear_session') {
-    // ── CLEANUP SESSION VRAM ──
     const { sessionId } = data;
-    const session = pipelineSessions.get(sessionId);
-    if (session) {
-      // Destroy kvCaches to prevent VRAM memory fragmentation
-      for (const cache of session.kvCaches) {
-        if (cache && cache.k) {
-          cache.k.destroy();
-          cache.v.destroy();
-        }
-      }
-      pipelineSessions.delete(sessionId);
-      console.log(`[Worker] Destroyed session ${sessionId} KV caches`);
+    activeSessions.delete(sessionId);
+    if (engine) {
+      try { await engine.resetChat(); } catch (e) { /* ignore */ }
     }
     return;
   }
