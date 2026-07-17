@@ -57,11 +57,12 @@ async function ensureModelLoaded(onProgress) {
       };
 
       const loadFile = async (fname, entry) => {
-        const buf = await readBin(fname, entry.size_bytes);
-        loadedBytes += entry.size_bytes;
-        if (onProgress) {
-          onProgress(loadedBytes, totalBytes, `Loaded ${fname}`);
-        }
+        const buf = await readBin(fname, entry.size_bytes, (chunkSize) => {
+          loadedBytes += chunkSize;
+          if (onProgress) {
+            onProgress(loadedBytes, totalBytes, `Downloading weights...`);
+          }
+        });
         return buf;
       };
 
@@ -128,8 +129,9 @@ const pipelineSessions = new Map();
 
 const MODEL_BASE_URL = import.meta.env.VITE_MODEL_URL || 'https://huggingface.co/datasets/iamekansh/hackwave/resolve/main';
 
-async function readBin(filename, size_bytes = 0) {
-  const timeoutMs = Math.max(20000, ((size_bytes / 1000000) * 1000) + 15000);
+async function readBin(filename, size_bytes = 0, onChunk = null) {
+  // Use a very large timeout since we are parallelizing 24 requests over potentially slow connections
+  const timeoutMs = 1800000; // 30 minutes
   let attempt = 0;
   let lastErr = null;
   while (attempt < 2) {
@@ -140,7 +142,29 @@ async function readBin(filename, size_bytes = 0) {
       const res = await fetch(`${MODEL_BASE_URL}/${filename}`, { signal: controller.signal });
       clearTimeout(timerId);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.arrayBuffer();
+      
+      if (!onChunk) {
+        return await res.arrayBuffer();
+      }
+
+      const reader = res.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        onChunk(value.length);
+      }
+      
+      const out = new Uint8Array(loaded);
+      let offset = 0;
+      for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return out.buffer;
     } catch (err) {
       clearTimeout(timerId);
       lastErr = err;
