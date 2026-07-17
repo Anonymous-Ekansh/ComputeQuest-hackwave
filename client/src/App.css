@@ -7,8 +7,8 @@
 }
 
 body {
-  background: #07080d;
-  color: #e0e0e0;
+  background: #09090b;
+  color: #fafafa;
   font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
   min-height: 100vh;
   overflow: hidden;
@@ -30,11 +30,11 @@ body {
 
 /* ── Left Sidebar ───────────────────────────────────────────────────────────── */
 .sidebar {
-  width: 320px;
-  min-width: 280px;
-  max-width: 360px;
-  background: #0a0a12;
-  border-right: 1px solid #1a1a28;
+  width: 250px;
+  min-width: 240px;
+  max-width: 280px;
+  background: #09090b;
+  border-right: 1px solid #27272a;
   overflow-y: auto;
   overflow-x: hidden;
   flex-shrink: 0;
@@ -64,16 +64,18 @@ body {
 .main-panel {
   flex: 1;
   overflow-y: auto;
-  background: #0a0f1a;
+  background: #18181b;
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Auth Card ──────────────────────────────────────────────────────────────── */
 .auth-card {
-  background: #111118;
-  border: 1px solid #1a1a25;
-  border-radius: 10px;
-  padding: 14px;
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 16px;
 }
 
 .auth-card h3 {
@@ -197,45 +199,41 @@ body {
 }
 
 .stat-card {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  padding: 10px;
   flex: 1;
-  padding: 14px 10px;
-  background: #111118;
-  border: 1px solid #1a1a25;
-  border-radius: 8px;
   text-align: center;
 }
 
 .stat-value {
-  font-size: 1.3rem;
-  font-weight: bold;
-  color: #818cf8;
-}
-
-.stat-card:nth-child(2) .stat-value {
-  color: #34d399;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #fafafa;
 }
 
 .stat-label {
-  font-size: 0.65rem;
-  color: #555;
-  margin-top: 2px;
+  font-size: 0.7rem;
+  color: #a1a1aa;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 1px;
+  margin-top: 4px;
 }
 
 /* ── Activity Log ───────────────────────────────────────────────────────────── */
 .log-container h3 {
-  font-size: 0.75rem;
-  color: #555;
+  font-size: 0.8rem;
+  color: #a1a1aa;
   text-transform: uppercase;
   letter-spacing: 1px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .log {
-  background: #0d0d14;
-  border: 1px solid #1a1a25;
-  border-radius: 8px;
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 6px;
   padding: 10px 12px;
   max-height: 200px;
   overflow-y: auto;

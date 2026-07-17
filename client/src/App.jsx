@@ -404,7 +404,7 @@ function App() {
           </div>
           
           {/* HackWave AI Chat Panel */}
-          <div style={{ width: '450px', flexShrink: 0, height: '100%', overflowY: 'auto' }}>
+          <div style={{ width: '300px', flexShrink: 0, height: '100%', overflowY: 'auto', borderLeft: '1px solid #27272a', background: '#09090b' }}>
             <ChatPanel socket={socketRef.current} />
           </div>
         </div>
