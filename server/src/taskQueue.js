@@ -1,11 +1,12 @@
 /**
  * server/src/taskQueue.js
  * 
- * Manages the task queuing and stage planning for INFERENCE_PIPELINE tasks.
- * (MATRIX_MULTIPLY tasks remain inside socketHandler.js for now).
+ * Manages task queuing and batch planning for:
+ *   - MOLECULE_SCREEN: splits a molecule library into fixed-size batches
+ *   - INFERENCE_PIPELINE: plans stages across available nodes
  */
 
-const { LLM_MAX_STAGES } = require('../../shared/constants');
+const { LLM_MAX_STAGES, MOLECULE_BATCH_SIZE } = require('../../shared/constants');
 
 /**
  * Computes a fresh pipeline stage plan based on available nodes.
@@ -50,6 +51,33 @@ function planStages(numLayers, numNodes) {
   return stages;
 }
 
+/**
+ * Split a molecule library into fixed-size batches for distributed screening.
+ *
+ * @param {Array<object>} moleculeLibrary - Array of molecule objects from molecule_library.json
+ * @param {number} [batchSize=MOLECULE_BATCH_SIZE] - Number of molecules per batch
+ * @returns {Array<{ batchId: string, molecules: Array<object> }>}
+ */
+function planMoleculeBatches(moleculeLibrary, batchSize = MOLECULE_BATCH_SIZE) {
+  const batches = [];
+
+  for (let i = 0; i < moleculeLibrary.length; i += batchSize) {
+    const slice = moleculeLibrary.slice(i, i + batchSize);
+    batches.push({
+      batchId: `batch_${String(batches.length).padStart(4, '0')}`,
+      molecules: slice,
+    });
+  }
+
+  console.log(
+    `[taskQueue] Planned ${batches.length} batches ` +
+    `(${moleculeLibrary.length} molecules, ${batchSize}/batch)`
+  );
+
+  return batches;
+}
+
 module.exports = {
-  planStages
+  planStages,
+  planMoleculeBatches,
 };

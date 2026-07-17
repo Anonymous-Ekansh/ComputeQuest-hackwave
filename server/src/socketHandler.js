@@ -1,7 +1,8 @@
-const { MATRIX_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS, DECK_SIZE, CREDITS_PER_CRYSTAL, LLM_LAYERS } = require('../../shared/constants');
+const { MOLECULE_BATCH_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS, DECK_SIZE, CREDITS_PER_CRYSTAL, LLM_LAYERS } = require('../../shared/constants');
 const { CARD_MAP } = require('../../shared/cards');
 const { getTokenizer } = require('./tokenizer');
-const { planStages } = require('./taskQueue');
+const { planStages, planMoleculeBatches } = require('./taskQueue');
+const { scoreMolecule } = require('./molecularScorer');
 const { getBotTier } = require('../../shared/bots');
 const { simulateBattle } = require('../../shared/battleLogic');
 const fs = require('fs');
@@ -11,9 +12,9 @@ const path = require('path');
 // ── constants ────────────────────────────────────────────────────────────────
 
 const BASE_TIMEOUT_MS = 30_000;          // scaled by complexity + node speed
-const MAX_CHUNK_RETRIES = 3;             // per-chunk retry cap before task:failed
-const DEADLINE_SCAN_INTERVAL_MS = 2_000; // how often we scan for overdue chunks
-const SPOT_CHECK_COUNT = 2;              // random cells to verify after reassembly
+const MAX_CHUNK_RETRIES = 3;             // per-batch retry cap before task:failed
+const DEADLINE_SCAN_INTERVAL_MS = 2_000; // how often we scan for overdue batches
+const SPOT_CHECK_TOLERANCE = 0.01;       // max allowed score delta for spot-checks
 
 const usersFilePath = path.join(__dirname, '..', 'data', 'users.json');
 
@@ -170,51 +171,42 @@ async function incrementUserCredits(userId, amount) {
 // socketId -> { id, userId, username, connectedAt, tasksCompleted, credits, status: 'idle'|'busy' }
 const nodes = new Map();
 
-// socketId -> { avgMsPerRow, samples }
+// socketId -> { avgMsPerBatch, samples }
 const nodePerformance = new Map();
 
-// taskId -> { matrixA, matrixB, totalRows, complexity,
-//             chunks: Map<chunkId, ChunkMeta>, results: Map<chunkId, ChunkResult>,
-//             dispatchedAt }
-//
-// ChunkMeta  = { socketId, userId, username, startRow, rowCount, deadline, retries }
-// ChunkResult = { rows, computeMs }
-const pendingTasks = new Map();
+// ── molecule screening state ─────────────────────────────────────────────────
 
-// FIFO queue of pre-generated tasks waiting for idle nodes
-const taskQueue = [];
+// Loaded once at startup from server/data/
+let moleculeLibrary = [];
+let targetConfig = {};
 
-// chunks that timed out with no idle node available — requeued for next idle
-// { taskId, chunkId }
-const requeuedChunks = [];
+// The current screening run
+let currentRunId = null;
+// FIFO queue of batches waiting for idle nodes: { batchId, molecules }
+let batchQueue = [];
+// Total batches in the current run (for progress tracking)
+let totalBatchCount = 0;
+
+// batchId -> { socketId, userId, username, deadline, retries, molecules }
+const pendingBatches = new Map();
+
+// batches that timed out with no idle node — requeued for next idle
+// { batchId }
+const requeuedBatches = [];
+
+// Completed batch count for current run
+let completedBatchCount = 0;
+
+// Top-100 molecule leaderboard (in-memory, persisted to Supabase)
+// Array of { smiles, name, id, composite_score, mw, logp, hbd, hba, rotatable_bonds, druglikeness_score, complementarity_score }
+let topMolecules = [];
+const TOP_MOLECULES_LIMIT = 100;
 
 // ── pipeline state ───────────────────────────────────────────────────────────
 // sessionId -> { stages: [ {stageIndex, socketId, ...} ], activeNodes: Set<socketId>, promptTokens: number[], currentTokenIndex: number, posOff: number }
 const activePipelines = new Map();
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-/** Generate a random matrix of given size */
-function randomMatrix(size) {
-  const matrix = [];
-  for (let i = 0; i < size; i++) {
-    const row = [];
-    for (let j = 0; j < size; j++) {
-      row.push(Math.floor(Math.random() * 10));
-    }
-    matrix.push(row);
-  }
-  return matrix;
-}
-
-/** Dot product of a row vector and a column extracted from a matrix */
-function dotRowCol(row, matrix, colIdx) {
-  let sum = 0;
-  for (let k = 0; k < row.length; k++) {
-    sum += row[k] * matrix[k][colIdx];
-  }
-  return sum;
-}
 
 /** Get all node IDs that are currently idle */
 function getIdleNodeIds(requireInference = false) {
@@ -251,7 +243,7 @@ function markIdleSilent(socketId) {
   node.status = 'idle';
 }
 
-/** Get the fastest idle node by avgMsPerRow (lowest = fastest) */
+/** Get the fastest idle node by avgMsPerBatch (lowest = fastest) */
 function getFastestIdleNode(customIds = null) {
   const idle = customIds || getIdleNodeIds();
   if (idle.length === 0) return null;
@@ -260,7 +252,7 @@ function getFastestIdleNode(customIds = null) {
   let bestSpeed = Infinity;
   for (const id of idle) {
     const perf = nodePerformance.get(id);
-    const speed = perf ? perf.avgMsPerRow : Infinity;
+    const speed = perf ? perf.avgMsPerBatch : Infinity;
     if (speed < bestSpeed) {
       bestSpeed = speed;
       best = id;
@@ -270,451 +262,348 @@ function getFastestIdleNode(customIds = null) {
 }
 
 /**
- * Adaptive timeout for a chunk on a given node.
- *   timeout = BASE_TIMEOUT_MS × (complexity / 64) × max(avgMsPerRow, 0.1)
- * Clamped to [5 000, 120 000] ms.
+ * Adaptive timeout for a batch on a given node.
+ * Clamped to [5_000, 120_000] ms.
  */
-function adaptiveTimeout(socketId, complexity) {
+function adaptiveTimeout(socketId) {
   const perf = nodePerformance.get(socketId);
-  const msPerRow = perf ? Math.max(perf.avgMsPerRow, 0.1) : 1;
-  const scaled = BASE_TIMEOUT_MS * (complexity / 64) * msPerRow;
+  const avgMs = perf ? Math.max(perf.avgMsPerBatch, 100) : BASE_TIMEOUT_MS;
+  // Give 3× the average observed time, or the base timeout, whichever is larger
+  const scaled = Math.max(BASE_TIMEOUT_MS, avgMs * 3);
   return Math.max(5_000, Math.min(120_000, scaled));
 }
 
-// ── smart splitting ──────────────────────────────────────────────────────────
+// ── molecule screening lifecycle ─────────────────────────────────────────────
 
 /**
- * Split `totalRows` across `nodeIds`, weighted by inverse of avgMsPerRow.
- *
- * Constraints enforced here:
- *   • max chunks = min(nodeIds.length, totalRows)
- *   • min chunk  = 1 row
- *   • 1 node → no split overhead (whole matrix as one chunk)
- *
- * Returns Map<socketId, { startRow, rowCount }>.
+ * Load molecule library and target config from disk.
+ * Called once at server startup.
  */
-function allocateRows(totalRows, nodeIds) {
-  // clamp: never more chunks than rows
-  const effectiveNodes = nodeIds.slice(0, Math.min(nodeIds.length, totalRows));
+function loadScreeningData() {
+  const libPath = path.join(__dirname, '..', 'data', 'molecule_library.json');
+  const targetPath = path.join(__dirname, '..', 'data', 'target.json');
 
-  // single node → no split overhead
-  if (effectiveNodes.length === 1) {
-    return new Map([[effectiveNodes[0], { startRow: 0, rowCount: totalRows }]]);
+  try {
+    const libRaw = JSON.parse(fs.readFileSync(libPath, 'utf-8'));
+    moleculeLibrary = libRaw.molecules || [];
+    console.log(`[screening] Loaded ${moleculeLibrary.length} molecules from molecule_library.json`);
+  } catch (err) {
+    console.error('[screening] Failed to load molecule_library.json:', err.message);
+    moleculeLibrary = [];
   }
 
-  // gather raw speeds
-  const speeds = effectiveNodes.map((id) => {
-    const perf = nodePerformance.get(id);
-    return perf ? perf.avgMsPerRow : null;
-  });
-
-  const known = speeds.filter((s) => s !== null);
-  const median =
-    known.length > 0
-      ? known.sort((a, b) => a - b)[Math.floor(known.length / 2)]
-      : 1;
-
-  const weights = speeds.map((s) => 1 / (s ?? median));
-  const totalWeight = weights.reduce((a, b) => a + b, 0);
-
-  const allocation = new Map();
-  let cursor = 0;
-  let remaining = totalRows;
-
-  for (let i = 0; i < effectiveNodes.length; i++) {
-    const isLast = i === effectiveNodes.length - 1;
-    let rowCount = isLast
-      ? remaining
-      : Math.max(1, Math.round((weights[i] / totalWeight) * totalRows));
-
-    rowCount = Math.min(rowCount, remaining);
-    if (rowCount <= 0) continue;
-
-    allocation.set(effectiveNodes[i], { startRow: cursor, rowCount });
-    cursor += rowCount;
-    remaining -= rowCount;
+  try {
+    targetConfig = JSON.parse(fs.readFileSync(targetPath, 'utf-8'));
+    console.log(`[screening] Loaded target: ${targetConfig.target_name} (${targetConfig.pdb_id})`);
+  } catch (err) {
+    console.error('[screening] Failed to load target.json:', err.message);
+    targetConfig = {};
   }
-
-  return allocation;
 }
 
-// ── task queue / demand-driven dispatch ───────────────────────────────────────
+/**
+ * Start (or restart) a screening run.
+ * Builds the batch queue from the full molecule library.
+ */
+function startScreeningRun(io) {
+  currentRunId = `screen_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const batches = planMoleculeBatches(moleculeLibrary, MOLECULE_BATCH_SIZE);
+  batchQueue = [...batches];
+  totalBatchCount = batches.length;
+  completedBatchCount = 0;
 
-/** Generate a fresh task and push it into the queue */
-function enqueueTask() {
-  const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const matrixA = randomMatrix(MATRIX_SIZE);
-  const matrixB = randomMatrix(MATRIX_SIZE);
-  const complexity = MATRIX_SIZE * MATRIX_SIZE;
+  console.log(`[screening] Started run ${currentRunId}: ${totalBatchCount} batches, ${moleculeLibrary.length} molecules`);
 
-  taskQueue.push({ taskId, matrixA, matrixB, complexity });
-  return taskId;
+  io.emit('screening:status', {
+    runId: currentRunId,
+    totalBatches: totalBatchCount,
+    completedBatches: 0,
+    totalMolecules: moleculeLibrary.length,
+    status: 'running',
+  });
 }
 
 /**
  * Core scheduling loop — triggered after every state change.
- * Dispatches the next queued task only when:
- *   1. At least one node is idle, AND
- *   2. No task is currently in-flight
+ * Dispatches the next queued batch to an idle node.
+ * Unlike MATRIX_MULTIPLY, multiple batches can be in-flight simultaneously
+ * (one per idle node).
  */
 function tryDispatchNext(io) {
-  const idle = getIdleNodeIds();
-  if (idle.length === 0) return;
-  if (pendingTasks.size > 0) return;
+  // Keep dispatching while we have both idle nodes and pending batches
+  while (true) {
+    if (batchQueue.length === 0) break;
 
-  if (taskQueue.length === 0) enqueueTask();
+    const idleNode = getFastestIdleNode();
+    if (!idleNode) break;
 
-  const task = taskQueue.shift();
-  dispatchTask(io, task, idle);
+    const node = nodes.get(idleNode);
+    if (!node || node.status === 'unauthenticated') break;
+
+    const batch = batchQueue.shift();
+    dispatchBatch(io, batch, idleNode);
+  }
 }
 
-/** Dispatch a prepared task to idle nodes */
-function dispatchTask(io, task, idleNodeIds) {
-  const { taskId, matrixA, matrixB, complexity } = task;
-  const totalRows = MATRIX_SIZE;
+/** Dispatch a single batch to a specific node */
+function dispatchBatch(io, batch, socketId) {
+  const { batchId, molecules } = batch;
+  const node = nodes.get(socketId);
+  const deadline = Date.now() + adaptiveTimeout(socketId);
 
-  const allocation = allocateRows(totalRows, idleNodeIds);
-  const chunks = new Map();
-  let chunkIdx = 0;
+  pendingBatches.set(batchId, {
+    socketId,
+    userId: node ? node.userId : null,
+    username: node ? node.username : 'Anonymous Node',
+    deadline,
+    retries: 0,
+    molecules,
+  });
 
-  for (const [socketId, { startRow, rowCount }] of allocation) {
-    const chunkId = `${taskId}_chunk_${chunkIdx}`;
-    const deadline = Date.now() + adaptiveTimeout(socketId, complexity);
-    const node = nodes.get(socketId);
+  markBusy(socketId);
 
-    chunks.set(chunkId, {
-      socketId,
-      userId: node ? node.userId : null,
-      username: node ? node.username : 'Anonymous Node',
-      startRow,
-      rowCount,
-      deadline,
-      retries: 0
-    });
-
-    const rowsA = matrixA.slice(startRow, startRow + rowCount);
-    const payload = {
-      taskId,
-      chunkId,
-      type: TASK_TYPES.MATRIX_MULTIPLY,
-      chunkData: { rowsA, matrixB },
-      startRow,
-      rowCount,
-      totalRows,
-    };
-
-    if (!node || node.status === 'unauthenticated') {
-      console.warn(`[dispatch] Refusing to send chunk to unauthenticated socket ${socketId}`);
-      continue;
-    }
-
-    markBusy(socketId);
-    io.to(socketId).emit('task_chunk', payload);
-    chunkIdx++;
-  }
-
-  pendingTasks.set(taskId, {
-    matrixA,
-    matrixB,
-    totalRows,
-    complexity,
-    chunks,
-    results: new Map(),
-    dispatchedAt: Date.now(),
+  io.to(socketId).emit('molecule_batch', {
+    taskId: currentRunId,
+    batchId,
+    molecules,
+    target: targetConfig,
   });
 
   console.log(
-    `[dispatch] Task ${taskId} (complexity ${complexity}) → ` +
-    `${chunks.size} chunk(s) across ${allocation.size} node(s)`,
+    `[dispatch] Batch ${batchId} (${molecules.length} mols) → ${socketId} ` +
+    `(${node ? node.username : 'anon'})`,
   );
 }
 
-// ── deadline scanner (replaces per-chunk setTimeout) ─────────────────────────
+// ── deadline scanner ─────────────────────────────────────────────────────────
 
-/**
- * Runs every DEADLINE_SCAN_INTERVAL_MS.
- * Scans all pendingTasks for overdue chunks and handles them.
- */
 function scanDeadlines(io) {
   const now = Date.now();
 
-  for (const [taskId, task] of pendingTasks) {
-    for (const [chunkId, meta] of task.chunks) {
-      // already have a result for this chunk
-      if (task.results.has(chunkId)) continue;
+  for (const [batchId, meta] of pendingBatches) {
+    if (now < meta.deadline) continue;
 
-      if (now < meta.deadline) continue;
+    // ── overdue ──
+    meta.retries++;
+    console.log(
+      `[timeout] Batch ${batchId} on ${meta.socketId} overdue ` +
+      `(retry ${meta.retries}/${MAX_CHUNK_RETRIES})`,
+    );
 
-      // ── overdue ──
-      meta.retries++;
-      console.log(
-        `[timeout] Chunk ${chunkId} on ${meta.socketId} overdue ` +
-        `(retry ${meta.retries}/${MAX_CHUNK_RETRIES})`,
-      );
-
-      // exceeded retry limit → fail the whole task
-      if (meta.retries > MAX_CHUNK_RETRIES) {
-        failTask(taskId, `Chunk ${chunkId} exceeded ${MAX_CHUNK_RETRIES} retries`, io);
-        break; // task is gone, stop iterating its chunks
-      }
-
-      // mark the old node idle (it's apparently stuck)
+    if (meta.retries > MAX_CHUNK_RETRIES) {
+      // Give up on this batch — remove it and log
+      console.error(`[FAILED] Batch ${batchId} exceeded ${MAX_CHUNK_RETRIES} retries, skipping`);
       markIdleSilent(meta.socketId);
+      pendingBatches.delete(batchId);
+      completedBatchCount++; // count as "done" to avoid blocking the run
+      emitScreeningProgress(io);
+      checkRunComplete(io);
+      continue;
+    }
 
-      // try to reassign
-      const replacement = getFastestIdleNode();
-      if (replacement) {
-        reassignChunk(taskId, chunkId, replacement, io);
-      } else {
-        // no idle node → requeue for the next available one
-        meta.deadline = Infinity; // stop re-triggering until reassigned
-        requeuedChunks.push({ taskId, chunkId });
-        console.log(`[requeue] Chunk ${chunkId} queued for next idle node`);
-      }
+    // mark the old node idle (it's apparently stuck)
+    markIdleSilent(meta.socketId);
+
+    // try to reassign
+    const replacement = getFastestIdleNode();
+    if (replacement) {
+      reassignBatch(batchId, replacement, io);
+    } else {
+      // no idle node → requeue for the next available one
+      meta.deadline = Infinity; // stop re-triggering until reassigned
+      requeuedBatches.push({ batchId });
+      console.log(`[requeue] Batch ${batchId} queued for next idle node`);
     }
   }
 }
 
-/** Reassign a single chunk to a new node */
-function reassignChunk(taskId, chunkId, socketId, io) {
-  const task = pendingTasks.get(taskId);
-  if (!task) return;
-
-  const meta = task.chunks.get(chunkId);
+/** Reassign a single batch to a new node */
+function reassignBatch(batchId, socketId, io) {
+  const meta = pendingBatches.get(batchId);
   if (!meta) return;
 
   const replacementNode = nodes.get(socketId);
   meta.socketId = socketId;
   meta.userId = replacementNode ? replacementNode.userId : null;
   meta.username = replacementNode ? replacementNode.username : 'Anonymous Node';
-  meta.deadline = Date.now() + adaptiveTimeout(socketId, task.complexity);
-
-  const rowsA = task.matrixA.slice(meta.startRow, meta.startRow + meta.rowCount);
-  const payload = {
-    taskId,
-    chunkId,
-    type: TASK_TYPES.MATRIX_MULTIPLY,
-    chunkData: { rowsA, matrixB: task.matrixB },
-    startRow: meta.startRow,
-    rowCount: meta.rowCount,
-    totalRows: task.totalRows,
-  };
+  meta.deadline = Date.now() + adaptiveTimeout(socketId);
 
   if (!replacementNode || replacementNode.status === 'unauthenticated') {
-    console.warn(`[reassign] Refusing to reassign chunk to unauthenticated socket ${socketId}`);
+    console.warn(`[reassign] Refusing to reassign batch to unauthenticated socket ${socketId}`);
     return;
   }
 
   markBusy(socketId);
-  io.to(socketId).emit('task_chunk', payload);
+  io.to(socketId).emit('molecule_batch', {
+    taskId: currentRunId,
+    batchId,
+    molecules: meta.molecules,
+    target: targetConfig,
+  });
 
   console.log(
-    `[reassign] Chunk ${chunkId} → ${socketId} ` +
-    `(deadline +${adaptiveTimeout(socketId, task.complexity)}ms)`,
+    `[reassign] Batch ${batchId} → ${socketId} ` +
+    `(deadline +${adaptiveTimeout(socketId)}ms)`,
   );
 }
 
-/** Drain requeued chunks whenever an idle node becomes available */
+/** Drain requeued batches whenever an idle node becomes available */
 function drainRequeued(io) {
-  while (requeuedChunks.length > 0) {
+  while (requeuedBatches.length > 0) {
     const replacement = getFastestIdleNode();
     if (!replacement) break;
 
-    const { taskId, chunkId } = requeuedChunks.shift();
+    const { batchId } = requeuedBatches.shift();
 
-    // task may have been failed/removed in the meantime
-    const task = pendingTasks.get(taskId);
-    if (!task || task.results.has(chunkId)) continue;
+    // batch may have been removed in the meantime
+    if (!pendingBatches.has(batchId)) continue;
 
-    reassignChunk(taskId, chunkId, replacement, io);
+    reassignBatch(batchId, replacement, io);
   }
 }
 
-// ── task failure ─────────────────────────────────────────────────────────────
+// ── progress & run completion ────────────────────────────────────────────────
 
-function failTask(taskId, reason, io) {
-  const task = pendingTasks.get(taskId);
-  if (!task) return;
-
-  console.error(`[FAILED] Task ${taskId}: ${reason}`);
-
-  // mark all assigned nodes idle
-  for (const [, meta] of task.chunks) {
-    markIdleSilent(meta.socketId);
-  }
-
-  // remove any requeued entries for this task
-  for (let i = requeuedChunks.length - 1; i >= 0; i--) {
-    if (requeuedChunks[i].taskId === taskId) requeuedChunks.splice(i, 1);
-  }
-
-  io.emit('task:failed', { taskId, reason });
-
-  pendingTasks.delete(taskId);
-
-  // try to move on to the next task
-  tryDispatchNext(io);
+function emitScreeningProgress(io) {
+  io.emit('screening:progress', {
+    runId: currentRunId,
+    completedBatches: completedBatchCount,
+    totalBatches: totalBatchCount,
+    percentComplete: Math.round((completedBatchCount / totalBatchCount) * 100),
+    moleculesScored: completedBatchCount * MOLECULE_BATCH_SIZE,
+    totalMolecules: moleculeLibrary.length,
+  });
 }
-
-// ── result verification ──────────────────────────────────────────────────────
 
 /**
- * Spot-check `SPOT_CHECK_COUNT` random cells of a chunk result against a
- * server-side dot-product computation.
- *
- * @returns {{ ok: boolean, failures: Array<{ i, j, expected, got }> }}
+ * Check if the current screening run is complete.
+ * If all batches have been returned, loop back for a continuous demo.
  */
-function verifyChunkResult(task, chunkMeta, resultRows) {
-  const { matrixA, matrixB } = task;
-  const { startRow, rowCount } = chunkMeta;
-  const cols = matrixB[0].length;
-  const failures = [];
+function checkRunComplete(io) {
+  if (completedBatchCount >= totalBatchCount && pendingBatches.size === 0) {
+    console.log(
+      `[screening] Run ${currentRunId} COMPLETE — ` +
+      `${totalBatchCount}/${totalBatchCount} batches, ` +
+      `${moleculeLibrary.length} molecules scored`
+    );
 
-  // ── untrusted client input validation ──
-  // ensure the payload matches the expected dimensions before indexing
-  if (!Array.isArray(resultRows) || resultRows.length !== rowCount) {
-    return { ok: false, failures: [{ expected: `${rowCount} rows`, got: 'malformed array length' }] };
-  }
-  for (let r = 0; r < rowCount; r++) {
-    if (!Array.isArray(resultRows[r]) || resultRows[r].length !== cols) {
-      return { ok: false, failures: [{ expected: `${cols} cols`, got: 'malformed row length' }] };
-    }
-  }
-
-  const checks = Math.min(SPOT_CHECK_COUNT, rowCount * cols);
-
-  for (let c = 0; c < checks; c++) {
-    // pick a random cell inside this chunk
-    const localRow = Math.floor(Math.random() * rowCount);
-    const col = Math.floor(Math.random() * cols);
-    const globalRow = startRow + localRow;
-
-    const expected = dotRowCol(matrixA[globalRow], matrixB, col);
-    const got = resultRows[localRow][col];
-
-    if (got !== expected) {
-      failures.push({ i: globalRow, j: col, expected, got });
-    }
-  }
-
-  return { ok: failures.length === 0, failures };
-}
-
-// ── progress events ──────────────────────────────────────────────────────────
-
-function emitProgress(taskId, io) {
-  const task = pendingTasks.get(taskId);
-  if (!task) return;
-
-  const chunksTotal = task.chunks.size;
-  const chunksComplete = task.results.size;
-  const percentComplete = Math.round((chunksComplete / chunksTotal) * 100);
-
-  io.emit('task:progress', { taskId, chunksComplete, chunksTotal, percentComplete });
-}
-
-// ── reassembly & credits ─────────────────────────────────────────────────────
-
-async function tryReassemble(taskId, io) {
-  const task = pendingTasks.get(taskId);
-  if (!task) return;
-
-  // have all chunks reported back?
-  if (task.results.size < task.chunks.size) return;
-
-  // sort chunks by startRow so we can concatenate in order
-  const ordered = [...task.chunks.entries()]
-    .map(([chunkId, meta]) => ({
-      chunkId,
-      ...meta,
-      result: task.results.get(chunkId),
-    }))
-    .sort((a, b) => a.startRow - b.startRow);
-
-  // concatenate result rows
-  const fullResult = [];
-  for (const { result } of ordered) {
-    fullResult.push(...result.rows);
-  }
-
-  // per-node contribution stats & credit awarding
-  const contributions = [];
-  for (const item of ordered) {
-    const { chunkId, socketId, userId, username, startRow, rowCount, result } = item;
-    const credits = rowCount;
-    const node = nodes.get(socketId);
-
-    let totalCredits = credits;
-    if (node) {
-      node.credits = (node.credits || 0) + credits;
-      node.tasksCompleted++;
-      totalCredits = node.credits;
-    }
-
-    // Persist to users table if authenticated using atomic increment
-    if (userId) {
-      try {
-        const updatedTotals = await incrementUserCredits(userId, credits);
-        if (updatedTotals) {
-          totalCredits = updatedTotals.credits;
-          if (node) {
-            node.credits = totalCredits; // keep in sync using authoritative db total
-          }
-          console.log(`[credits] Persisted ${credits} credits to user ${username}. Total: ${updatedTotals.credits}, Lifetime: ${updatedTotals.total_contributed}`);
-        }
-      } catch (err) {
-        console.error(`[credits] Failed to persist credits for user ${userId}:`, err);
-      }
-    }
-
-    contributions.push({
-      chunkId,
-      socketId,
-      userId,
-      username,
-      startRow,
-      rowCount,
-      computeMs: result.computeMs,
-      creditsAwarded: credits,
-      totalCredits: totalCredits,
+    io.emit('screening:status', {
+      runId: currentRunId,
+      totalBatches: totalBatchCount,
+      completedBatches: completedBatchCount,
+      totalMolecules: moleculeLibrary.length,
+      status: 'complete',
     });
+
+    // Loop: restart with the same library for continuous demo
+    console.log('[screening] Looping — starting new screening run');
+    startScreeningRun(io);
+    tryDispatchNext(io);
   }
+}
 
-  const elapsed = Date.now() - task.dispatchedAt;
+// ── molecule leaderboard (top 100) ───────────────────────────────────────────
 
-  console.log(
-    `[complete] Task ${taskId} reassembled in ${elapsed}ms — ` +
-    contributions
-      .map((c) => `${c.socketId.slice(0, 6)}… ${c.rowCount}r/${c.computeMs}ms/+${c.creditsAwarded}cr`)
-      .join(', '),
-  );
+/**
+ * Merge newly scored molecules into the top-100 leaderboard.
+ * Also persist to Supabase if available.
+ */
+async function updateMoleculeLeaderboard(scoredMolecules) {
+  // Merge into in-memory list
+  for (const mol of scoredMolecules) {
+    if (mol == null || typeof mol.composite_score !== 'number') continue;
 
-  // broadcast the completed task to all clients
-  io.emit('task:complete', {
-    taskId,
-    matrixA: task.matrixA,
-    matrixB: task.matrixB,
-    result: fullResult,
-    totalTimeMs: elapsed,
-    contributions,
-  });
-
-  // Emit updated user info/credits to authenticated nodes
-  for (const { socketId } of contributions) {
-    const activeNode = nodes.get(socketId);
-    if (activeNode) {
-      io.to(socketId).emit('user_info', {
-        username: activeNode.username,
-        credits: activeNode.credits,
-        isAuthenticated: !!activeNode.userId,
-      });
+    // Check if this molecule is already in the leaderboard (by smiles)
+    const existingIdx = topMolecules.findIndex(m => m.smiles === mol.smiles);
+    if (existingIdx >= 0) {
+      // Update if the new score is better
+      if (mol.composite_score > topMolecules[existingIdx].composite_score) {
+        topMolecules[existingIdx] = mol;
+      }
+    } else {
+      topMolecules.push(mol);
     }
   }
 
-  pendingTasks.delete(taskId);
+  // Sort descending by composite_score and truncate to top 100
+  topMolecules.sort((a, b) => b.composite_score - a.composite_score);
+  topMolecules = topMolecules.slice(0, TOP_MOLECULES_LIMIT);
 
-  // task done → check if we should immediately dispatch the next one
-  tryDispatchNext(io);
+  // Persist to Supabase
+  if (supabase) {
+    try {
+      // Upsert scored molecules
+      const rows = scoredMolecules
+        .filter(m => m != null && typeof m.composite_score === 'number')
+        .map(m => ({
+          smiles: m.smiles,
+          name: m.name || null,
+          molecule_id: m.molecule_id || null,
+          mw: m.mw,
+          logp: m.logp,
+          hbd: m.hbd,
+          hba: m.hba,
+          rotatable_bonds: m.rotatable_bonds,
+          druglikeness_score: m.druglikeness_score,
+          complementarity_score: m.complementarity_score,
+          composite_score: m.composite_score,
+        }));
+
+      if (rows.length > 0) {
+        const { error } = await supabase
+          .from('molecule_scores')
+          .upsert(rows, { onConflict: 'smiles' });
+
+        if (error) {
+          console.error('[leaderboard] Supabase upsert error:', error.message);
+        }
+      }
+    } catch (err) {
+      console.error('[leaderboard] Supabase persist error:', err.message || err);
+    }
+  }
+}
+
+// ── spot-check verification ──────────────────────────────────────────────────
+
+/**
+ * Re-score 1 random molecule from a batch result server-side and compare.
+ * Logs a warning if the scores differ beyond SPOT_CHECK_TOLERANCE.
+ */
+async function spotCheckBatchResult(results, batchMolecules) {
+  if (!results || results.length === 0) return;
+
+  // Pick a random result to verify
+  const idx = Math.floor(Math.random() * results.length);
+  const clientResult = results[idx];
+  if (!clientResult || !clientResult.smiles) return;
+
+  try {
+    const serverResult = await scoreMolecule(clientResult.smiles, targetConfig);
+
+    if (!serverResult) {
+      console.warn(
+        `[spot-check] Server could not parse SMILES that client scored: "${clientResult.smiles}"`
+      );
+      return;
+    }
+
+    const delta = Math.abs(clientResult.composite_score - serverResult.composite_score);
+    if (delta > SPOT_CHECK_TOLERANCE) {
+      console.warn(
+        `[spot-check] MISMATCH for "${clientResult.smiles}": ` +
+        `client=${clientResult.composite_score}, server=${serverResult.composite_score}, ` +
+        `delta=${delta.toFixed(4)}`
+      );
+    } else {
+      console.log(
+        `[spot-check] OK "${clientResult.smiles.slice(0, 30)}…" ` +
+        `(Δ=${delta.toFixed(4)}) ✓`
+      );
+    }
+  } catch (err) {
+    console.error('[spot-check] Error during server-side re-scoring:', err.message || err);
+  }
 }
 
 // ── pipeline helpers ──────────────────────────────────────────────────────────
@@ -773,6 +662,9 @@ function resetStallTimer(sessionId, stageIndex, io) {
 // ── socket setup ─────────────────────────────────────────────────────────────
 
 function setupSocketHandler(io) {
+  // ── Load screening data at startup ──
+  loadScreeningData();
+
   io.on('connection', (socket) => {
     // ── 1. Synchronous Initial Setup ──
     nodes.set(socket.id, {
@@ -927,93 +819,118 @@ function setupSocketHandler(io) {
       io.emit('node_count', nodes.size);
     })();
 
-    // handle compute results coming back from a browser
-    socket.on('chunk_result', (data) => {
+    // ── handle molecule batch results coming back from a browser ──
+    socket.on('molecule_batch_result', async (data) => {
       try {
         // ── untrusted client input validation ──
-        if (!data || typeof data.taskId !== 'string' || typeof data.chunkId !== 'string' || !Array.isArray(data.resultRows)) {
-          console.warn(`[result] Malformed payload from ${socket.id}`);
+        if (!data || typeof data.batchId !== 'string' || !Array.isArray(data.results)) {
+          console.warn(`[result] Malformed molecule_batch_result from ${socket.id}`);
           markIdle(socket.id, io);
           return;
         }
 
-        const { taskId, chunkId, resultRows, computeMs } = data;
+        const { batchId, results, computeMs } = data;
 
-        const task = pendingTasks.get(taskId);
-        if (!task) {
-          markIdle(socket.id, io);
-          return;
-        }
-
-        const chunkMeta = task.chunks.get(chunkId);
-        if (!chunkMeta) {
+        const meta = pendingBatches.get(batchId);
+        if (!meta) {
           markIdle(socket.id, io);
           return;
         }
 
         // ignore results from a node that was already reassigned away
-        if (chunkMeta.socketId !== socket.id) {
+        if (meta.socketId !== socket.id) {
           console.log(
-            `[result] Ignoring late result from ${socket.id} for ${chunkId} (reassigned to ${chunkMeta.socketId})`,
+            `[result] Ignoring late result from ${socket.id} for ${batchId} (reassigned to ${meta.socketId})`,
           );
           markIdle(socket.id, io);
           return;
         }
 
-        // ── spot-check verification ──
-        const verification = verifyChunkResult(task, chunkMeta, resultRows);
-        if (!verification.ok) {
-          console.warn(
-            `[verify] Chunk ${chunkId} FAILED spot-check:`,
-            verification.failures,
-          );
+        // ── spot-check verification (async, non-blocking) ──
+        spotCheckBatchResult(results, meta.molecules).catch(err => {
+          console.error('[spot-check] Uncaught error:', err);
+        });
 
-          chunkMeta.retries++;
-
-          if (chunkMeta.retries > MAX_CHUNK_RETRIES) {
-            failTask(taskId, `Chunk ${chunkId} failed verification ${MAX_CHUNK_RETRIES} times`, io);
-            markIdle(socket.id, io);
-            return;
-          }
-
-          // re-dispatch only this chunk to the same or a different node
-          console.log(
-            `[verify] Re-dispatching chunk ${chunkId} (retry ${chunkMeta.retries}/${MAX_CHUNK_RETRIES})`,
-          );
-          markIdleSilent(socket.id);
-          const target = getFastestIdleNode() || socket.id;
-          reassignChunk(taskId, chunkId, target, io);
-          return;
-        }
-
-        // ── verification passed — accept result ──
-
-        // update performance map
-        const msPerRow = computeMs / chunkMeta.rowCount;
+        // ── update performance map ──
+        const elapsed = computeMs || 0;
         const prev = nodePerformance.get(socket.id);
         if (prev) {
-          prev.avgMsPerRow = prev.avgMsPerRow * 0.7 + msPerRow * 0.3;
+          prev.avgMsPerBatch = prev.avgMsPerBatch * 0.7 + elapsed * 0.3;
           prev.samples++;
         } else {
-          nodePerformance.set(socket.id, { avgMsPerRow: msPerRow, samples: 1 });
+          nodePerformance.set(socket.id, { avgMsPerBatch: elapsed, samples: 1 });
         }
 
-        // store result rows for reassembly
-        task.results.set(chunkId, { rows: resultRows, computeMs });
+        // ── award credits: 1 credit per molecule scored ──
+        const credits = results.length;
+        const node = nodes.get(socket.id);
+
+        let totalCredits = credits;
+        if (node) {
+          node.credits = (node.credits || 0) + credits;
+          node.tasksCompleted++;
+          totalCredits = node.credits;
+        }
+
+        // Persist to users table if authenticated
+        if (meta.userId) {
+          try {
+            const updatedTotals = await incrementUserCredits(meta.userId, credits);
+            if (updatedTotals) {
+              totalCredits = updatedTotals.credits;
+              if (node) {
+                node.credits = totalCredits;
+              }
+              console.log(`[credits] Persisted ${credits} credits to user ${meta.username}. Total: ${updatedTotals.credits}, Lifetime: ${updatedTotals.total_contributed}`);
+            }
+          } catch (err) {
+            console.error(`[credits] Failed to persist credits for user ${meta.userId}:`, err);
+          }
+        }
+
+        // ── update molecule leaderboard ──
+        // Tag results with molecule metadata from the original batch
+        const enrichedResults = results.map((r, i) => {
+          const origMol = meta.molecules[i];
+          return {
+            ...r,
+            name: origMol ? origMol.name : undefined,
+            molecule_id: origMol ? origMol.id : undefined,
+          };
+        });
+        updateMoleculeLeaderboard(enrichedResults).catch(err => {
+          console.error('[leaderboard] Update error:', err);
+        });
 
         console.log(
-          `[result] ${socket.id} finished chunk ${chunkId} of ${taskId} in ${computeMs}ms ✓`,
+          `[result] ${socket.id} finished batch ${batchId} ` +
+          `(${results.length} mols, ${elapsed}ms, +${credits}cr) ✓`,
         );
 
-        // emit granular progress
-        emitProgress(taskId, io);
+        // Emit updated user info/credits to the node
+        if (node) {
+          io.to(socket.id).emit('user_info', {
+            username: node.username,
+            credits: node.credits,
+            isAuthenticated: !!node.userId,
+          });
+        }
 
-        // node is now idle — this also triggers tryDispatchNext via markIdle
+        // ── clean up this batch ──
+        pendingBatches.delete(batchId);
+        completedBatchCount++;
+
+        // emit progress
+        emitScreeningProgress(io);
+
+        // node is now idle — also triggers tryDispatchNext
         markIdle(socket.id, io);
 
-        tryReassemble(taskId, io);
+        // check if the whole run is done
+        checkRunComplete(io);
+
       } catch (err) {
-        console.error(`[result] Uncaught exception processing chunk_result from ${socket.id}:`, err);
+        console.error(`[result] Uncaught exception processing molecule_batch_result from ${socket.id}:`, err);
         markIdle(socket.id, io);
       }
     });
@@ -1618,23 +1535,25 @@ function setupSocketHandler(io) {
         }
       }
 
-      // immediately reassign any in-flight chunks from this node
-      for (const [taskId, task] of pendingTasks) {
-        for (const [chunkId, meta] of task.chunks) {
-          if (meta.socketId === socket.id && !task.results.has(chunkId)) {
-            meta.retries++;
-            if (meta.retries > MAX_CHUNK_RETRIES) {
-              failTask(taskId, `Node ${socket.id} disconnected, chunk ${chunkId} exceeded retries`, io);
-              break;
-            }
-            const replacement = getFastestIdleNode();
-            if (replacement) {
-              reassignChunk(taskId, chunkId, replacement, io);
-            } else {
-              meta.deadline = Infinity;
-              requeuedChunks.push({ taskId, chunkId });
-              console.log(`[requeue] Chunk ${chunkId} queued (node ${socket.id} disconnected)`);
-            }
+      // immediately reassign any in-flight batches from this node
+      for (const [batchId, meta] of pendingBatches) {
+        if (meta.socketId === socket.id) {
+          meta.retries++;
+          if (meta.retries > MAX_CHUNK_RETRIES) {
+            console.error(`[FAILED] Batch ${batchId}: node ${socket.id} disconnected, exceeded retries`);
+            pendingBatches.delete(batchId);
+            completedBatchCount++;
+            emitScreeningProgress(io);
+            checkRunComplete(io);
+            continue;
+          }
+          const replacement = getFastestIdleNode();
+          if (replacement) {
+            reassignBatch(batchId, replacement, io);
+          } else {
+            meta.deadline = Infinity;
+            requeuedBatches.push({ batchId });
+            console.log(`[requeue] Batch ${batchId} queued (node ${socket.id} disconnected)`);
           }
         }
       }
@@ -1644,11 +1563,11 @@ function setupSocketHandler(io) {
     });
   });
 
-  // deadline scanner — every 2 s, check for overdue chunks
+  // deadline scanner — every 2 s, check for overdue batches
   setInterval(() => scanDeadlines(io), DEADLINE_SCAN_INTERVAL_MS);
 
-  // seed the first task so work begins as soon as a node connects
-  enqueueTask();
+  // Start the first screening run so work begins as soon as a node connects
+  startScreeningRun(io);
 }
 
 // ── leaderboard logic ────────────────────────────────────────────────────────
@@ -1684,4 +1603,9 @@ async function getForgemasterLeaderboard() {
   }));
 }
 
-module.exports = { setupSocketHandler, getLeaderboard, getForgemasterLeaderboard };
+/** Get the current top-100 molecule leaderboard (in-memory) */
+function getMoleculeLeaderboard() {
+  return topMolecules.slice(0, TOP_MOLECULES_LIMIT);
+}
+
+module.exports = { setupSocketHandler, getLeaderboard, getForgemasterLeaderboard, getMoleculeLeaderboard };
