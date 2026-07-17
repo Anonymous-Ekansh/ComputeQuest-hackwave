@@ -508,8 +508,9 @@ function checkRunComplete(io) {
  * Merge newly scored molecules into the top-100 leaderboard.
  * Also persist to Supabase if available.
  */
-async function updateMoleculeLeaderboard(scoredMolecules) {
+async function updateMoleculeLeaderboard(scoredMolecules, userId) {
   // Merge into in-memory list
+  let added = 0;
   for (const mol of scoredMolecules) {
     if (mol == null || typeof mol.composite_score !== 'number') continue;
 
@@ -522,12 +523,15 @@ async function updateMoleculeLeaderboard(scoredMolecules) {
       }
     } else {
       topMolecules.push(mol);
+      added++;
     }
   }
 
   // Sort descending by composite_score and truncate to top 100
   topMolecules.sort((a, b) => b.composite_score - a.composite_score);
   topMolecules = topMolecules.slice(0, TOP_MOLECULES_LIMIT);
+
+  console.log(`[leaderboard] In-memory: +${added} new, ${topMolecules.length} total. Top score: ${topMolecules[0]?.composite_score?.toFixed(4) || 'N/A'}`);
 
   // Persist to Supabase
   if (supabase) {
@@ -547,15 +551,18 @@ async function updateMoleculeLeaderboard(scoredMolecules) {
           druglikeness_score: m.druglikeness_score,
           complementarity_score: m.complementarity_score,
           composite_score: m.composite_score,
+          scored_by_user_id: userId || null,
         }));
 
       if (rows.length > 0) {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('molecule_scores')
           .upsert(rows, { onConflict: 'smiles' });
 
         if (error) {
-          console.error('[leaderboard] Supabase upsert error:', error.message);
+          console.error('[leaderboard] Supabase upsert error:', error.message, error.details, error.hint);
+        } else {
+          console.log(`[leaderboard] Persisted ${rows.length} molecules to Supabase`);
         }
       }
     } catch (err) {
@@ -892,14 +899,15 @@ function setupSocketHandler(io) {
         // Tag results with molecule metadata from the original batch
         const enrichedResults = results.map((r, i) => {
           const origMol = meta.molecules[i];
+          if (!r) return r;
           return {
             ...r,
             name: origMol ? origMol.name : undefined,
             molecule_id: origMol ? origMol.id : undefined,
-            is_known_reference: origMol ? origMol.is_known_reference : undefined,
+            is_known_reference: origMol ? (origMol.is_known_reference === true) : false,
           };
         });
-        updateMoleculeLeaderboard(enrichedResults).catch(err => {
+        updateMoleculeLeaderboard(enrichedResults, meta.userId).catch(err => {
           console.error('[leaderboard] Update error:', err);
         });
 
@@ -1313,7 +1321,31 @@ function setupSocketHandler(io) {
     // ── INFERENCE PIPELINE EVENTS ────────────────────────────────────────────
 
     socket.on('start_generation', async ({ sessionId, prompt }) => {
-      const idleIds = getIdleNodeIds(true);
+      // First try: find idle nodes that support inference
+      let idleIds = getIdleNodeIds(true);
+
+      // If no idle inference nodes, try to find ANY node that supports inference
+      // (it may be busy with molecule screening, which can be safely interrupted)
+      if (idleIds.length === 0) {
+        const allInferenceNodes = [];
+        for (const [id, node] of nodes) {
+          if (node.supportsInference && node.status !== 'unauthenticated') {
+            allInferenceNodes.push(id);
+          }
+        }
+        if (allInferenceNodes.length > 0) {
+          // Temporarily mark one busy node as idle so inference can proceed
+          // The screening batch will time out and be reassigned, which is fine
+          const candidateId = allInferenceNodes[0];
+          const candidateNode = nodes.get(candidateId);
+          if (candidateNode) {
+            console.log(`[pipeline] Preempting screening on ${candidateId} for inference`);
+            candidateNode.status = 'idle';
+            idleIds = [candidateId];
+          }
+        }
+      }
+
       if (idleIds.length === 0) {
         socket.emit('generation_error', { sessionId, reason: 'No idle nodes available for inference pipeline.' });
         return;

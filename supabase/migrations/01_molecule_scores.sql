@@ -12,7 +12,7 @@ CREATE TABLE molecule_scores (
   complementarity_score numeric,
   composite_score numeric,
   is_known_reference boolean DEFAULT false,
-  scored_by_user_id text REFERENCES users(id), -- Assuming users(id) is text based on Google ID fallback logic, adjust to UUID if users(id) is UUID
+  scored_by_user_id text,  -- Google user ID (no FK — user may not exist in users table yet)
   scored_at timestamptz DEFAULT now()
 );
 
@@ -25,6 +25,6 @@ ALTER TABLE molecule_scores ENABLE ROW LEVEL SECURITY;
 -- Allow anyone to read leaderboard
 CREATE POLICY "Anyone can view molecule scores" ON molecule_scores FOR SELECT USING (true);
 
--- Allow inserts and updates (Node server might be using anon key or service role)
+-- Allow inserts and updates (Node server uses service key)
 CREATE POLICY "Server can insert molecule scores" ON molecule_scores FOR INSERT WITH CHECK (true);
-CREATE POLICY "Server can update molecule scores" ON molecule_scores FOR UPDATE USING (true);
+CREATE POLICY "Server can update molecule scores" ON molecule_scores FOR UPDATE USING (true) WITH CHECK (true);
