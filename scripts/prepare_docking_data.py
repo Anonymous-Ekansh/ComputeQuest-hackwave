@@ -26,7 +26,37 @@ def download_and_prepare_receptor():
     
     clean_pdb = '\n'.join(clean_lines)
     
-    # Simple mock PDBQT string if Meeko receptor prep is not available
+    # Compute bounding box for active site docking (using co-crystallized ligand)
+    ligand_x, ligand_y, ligand_z = [], [], []
+    for line in pdb_text.splitlines():
+        if line.startswith('HETATM') and 'APN' in line:
+            x = float(line[30:38].strip())
+            y = float(line[38:46].strip())
+            z = float(line[46:54].strip())
+            ligand_x.append(x)
+            ligand_y.append(y)
+            ligand_z.append(z)
+            
+    if ligand_x:
+        center_x = sum(ligand_x) / len(ligand_x)
+        center_y = sum(ligand_y) / len(ligand_y)
+        center_z = sum(ligand_z) / len(ligand_z)
+        
+        box_config = {
+            "center_x": round(center_x, 3),
+            "center_y": round(center_y, 3),
+            "center_z": round(center_z, 3),
+            "size_x": 22.0,
+            "size_y": 22.0,
+            "size_z": 22.0
+        }
+        
+        box_path = os.path.join(DATA_DIR, 'box_config.json')
+        with open(box_path, 'w') as f:
+            json.dump(box_config, f, indent=2)
+        print(f"Saved active site box config to {box_path}")
+
+    # Require Meeko for proper PDBQT preparation
     try:
         from meeko import ReceptorPreparation
         print("Preparing receptor PDBQT with Meeko...")
@@ -36,15 +66,13 @@ def download_and_prepare_receptor():
         if isinstance(pdbqt_str, tuple):
             pdbqt_str = pdbqt_str[0]
     except Exception as e:
-        print(f"Meeko ReceptorPreparation failed/missing: {e}")
-        print("Using basic fallback for Receptor PDBQT...")
-        # A very basic fallback just putting atoms (without partial charges)
-        pdbqt_str = clean_pdb
+        print(f"Meeko ReceptorPreparation failed: {e}")
+        import sys
+        sys.exit(1)
         
     receptor_path = os.path.join(DATA_DIR, 'receptor.pdbqt')
     with open(receptor_path, 'w') as f:
         f.write(pdbqt_str)
-    
     print(f"Saved receptor to {receptor_path}")
 
 def prepare_ligands():

@@ -3,6 +3,7 @@
 
 let receptorPdbqt = null;
 let webinaModule = null;
+let boxConfig = null;
 
 // Initialize Webina Module
 async function initWebina() {
@@ -42,6 +43,24 @@ async function getReceptor() {
   return receptorPdbqt;
 }
 
+// Fetch bounding box config if not cached
+async function getBoxConfig() {
+  if (boxConfig) return boxConfig;
+  try {
+    const res = await fetch('/box_config.json');
+    if (res.ok) {
+      boxConfig = await res.json();
+    }
+  } catch (err) {
+    console.error('[DockingWorker] Failed to fetch box_config.json', err);
+  }
+  // Fallback to origin with a large box if missing
+  return boxConfig || {
+    center_x: 0, center_y: 0, center_z: 0,
+    size_x: 40, size_y: 40, size_z: 40
+  };
+}
+
 // Extract the best binding affinity from the PDBQT output
 function parseAffinity(outPdbqt) {
   if (!outPdbqt) return null;
@@ -60,6 +79,7 @@ function parseAffinity(outPdbqt) {
 export async function scoreMoleculeBatch(molecules) {
   const mod = await initWebina();
   const rec = await getReceptor();
+  const box = await getBoxConfig();
   
   const results = [];
   
@@ -69,55 +89,56 @@ export async function scoreMoleculeBatch(molecules) {
       continue;
     }
     
-    // For Webina to work perfectly it needs exactly bounded grid boxes. 
-    // In a real hackathon pipeline without pre-computed pocket centers, 
-    // we use a large box around the origin or fallback to a structural scoring heuristic 
-    // if the WASM fails due to box size limitations.
     try {
       if (mod && rec && mol.pdbqt) {
         // Write files to virtual FS
         mod.FS.writeFile('receptor.pdbqt', rec);
         mod.FS.writeFile('ligand.pdbqt', mol.pdbqt);
         
-        // Call Vina main. Using a large box center 0,0,0 size 30,30,30.
-        // If this throws, it usually means the box is too small or ligand is outside.
-        // Since we are triaging, we suppress stdout to avoid spam.
+        // Call Vina main using dynamic bounding box
         mod.callMain([
           '--receptor', 'receptor.pdbqt',
           '--ligand', 'ligand.pdbqt',
-          '--center_x', '0', '--center_y', '0', '--center_z', '0',
-          '--size_x', '40', '--size_y', '40', '--size_z', '40',
+          '--center_x', String(box.center_x), '--center_y', String(box.center_y), '--center_z', String(box.center_z),
+          '--size_x', String(box.size_x), '--size_y', String(box.size_y), '--size_z', String(box.size_z),
           '--cpu', '1',
           '--exhaustiveness', '1', // extremely fast for browser
           '--out', 'out.pdbqt'
         ]);
         
-        const outData = mod.FS.readFile('out.pdbqt', { encoding: 'utf8' });
+        let outData = null;
+        try {
+          outData = mod.FS.readFile('out.pdbqt', { encoding: 'utf8' });
+        } catch (e) {
+          // If Vina failed to write output (e.g. grid box too small), readFile throws
+          console.error(`[DockingWorker] Webina output missing for ${mol.smiles}:`, e);
+        }
+
         const affinity = parseAffinity(outData);
         
         results.push({
           smiles: mol.smiles,
-          affinity: affinity || -4.0, // fallback if parser fails
+          affinity: affinity !== null ? affinity : -2.0, 
+          source: affinity !== null ? 'real' : 'fallback_error'
         });
         
         // Clean up FS
-        mod.FS.unlink('receptor.pdbqt');
-        mod.FS.unlink('ligand.pdbqt');
-        mod.FS.unlink('out.pdbqt');
+        try { mod.FS.unlink('receptor.pdbqt'); } catch(e){}
+        try { mod.FS.unlink('ligand.pdbqt'); } catch(e){}
+        try { mod.FS.unlink('out.pdbqt'); } catch(e){}
       } else {
-        // Fallback structural score if PDBQT is missing or Webina failed to load
-        // Generate a pseudo-affinity based on SMILES length (just for robustness)
-        const pseudoAffinity = -5.0 - (mol.smiles.length % 5);
         results.push({
           smiles: mol.smiles,
-          affinity: pseudoAffinity,
+          affinity: -5.0 - (mol.smiles.length % 5),
+          source: 'fallback_missing'
         });
       }
     } catch (err) {
       console.error(`[DockingWorker] Webina failed for ${mol.smiles}:`, err);
       results.push({
         smiles: mol.smiles,
-        affinity: -2.0, // weak binder
+        affinity: -2.0,
+        source: 'fallback_error'
       });
     }
   }

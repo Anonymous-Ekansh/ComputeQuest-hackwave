@@ -43,7 +43,7 @@ if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
   console.log('[db] Supabase REST client initialized');
 } else {
-  console.warn('[db] Missing SUPABASE_URL or SUPABASE_ANON_KEY. Falling back to local users.json');
+  console.warn('[db] Missing SUPABASE_URL or SUPABASE_SERVICE_KEY. Falling back to local users.json');
 }
 
 async function loadUsers() {
@@ -323,8 +323,6 @@ function dispatchChunk(io, chunk, socketId) {
     batchId: chunk.chunkId,
     molecules: chunk.molecules,
     modelVersion: getModelVersion(),
-    referenceAntibiotics: modelInfo.referenceAntibiotics,
-    referenceEmbeddings: modelInfo.referenceEmbeddings,
   });
 
   console.log(
@@ -673,7 +671,23 @@ function setupSocketHandler(io) {
         const { batchId, results, computeMs } = data;
         const node = nodes.get(socket.id);
 
+        // Sanity Bounds Check
         const elapsed = computeMs || 0;
+        const chunkSize = results.length;
+        if (chunkSize > 0 && (elapsed / chunkSize) < MIN_COMPUTE_MS_PER_MOLECULE) {
+          console.warn(`[result] Implausibly fast compute time from ${socket.id}: ${elapsed}ms for ${chunkSize} molecules`);
+          markIdle(socket.id, io);
+          return;
+        }
+
+        // Filter and bounds-check real results only
+        const realResults = results.filter(r => {
+          if (r.source !== 'real') return false;
+          if (typeof r.affinity !== 'number') return false;
+          if (r.affinity < -15.0 || r.affinity > 5.0) return false;
+          return true;
+        });
+
         const prev = nodePerformance.get(socket.id);
         if (prev) {
           prev.avgMsPerBatch = prev.avgMsPerBatch * 0.7 + elapsed * 0.3;
@@ -682,27 +696,81 @@ function setupSocketHandler(io) {
           nodePerformance.set(socket.id, { avgMsPerBatch: elapsed, samples: 1 });
         }
 
-        const recordStatus = chunkManager.recordResult(batchId, socket.id);
+        const recordOutcome = chunkManager.recordResult(batchId, socket.id, realResults, node?.userId);
         markIdle(socket.id, io);
 
-        if (recordStatus === 'ignored') return;
+        if (recordOutcome.status === 'ignored' || recordOutcome.status === 'accepted_partial') {
+          return;
+        }
 
-        console.log(`[result] ✓ ${batchId} PASSED from ${socket.id}`);
-
-        updateMoleculeLeaderboard(results).catch(err => {
-          console.error('[leaderboard] Update error:', err);
-        });
-
-        const chunkSize = results.length;
-        if (node?.userId) {
-          await awardCredits(node.userId, batchId, chunkSize, computeMs || 0);
-          io.to(socket.id).emit('user_info', {
-            username: node.username,
-            credits: node.credits,
-            isAuthenticated: !!node.userId,
-          });
+        // We have reached CONSENSUS_K results for this chunk. Verify them.
+        const chunk = recordOutcome.chunk;
+        let consensusPassed = true;
+        
+        // chunk.results is an array of { socketId, userId, payload: realResults }
+        // Verify that the affinity for each molecule agrees within 0.5 kcal/mol across all nodes
+        // First, reorganize by SMILES to compare across nodes easily
+        const smilesMap = new Map();
+        for (const sub of chunk.results) {
+          for (const res of sub.payload) {
+            if (!smilesMap.has(res.smiles)) smilesMap.set(res.smiles, []);
+            smilesMap.get(res.smiles).push(res.affinity);
+          }
         }
         
+        for (const [smiles, affinities] of smilesMap) {
+          if (affinities.length < CONSENSUS_K) {
+            consensusPassed = false; // Some nodes didn't return this molecule
+            break;
+          }
+          const minAff = Math.min(...affinities);
+          const maxAff = Math.max(...affinities);
+          if (maxAff - minAff > 0.5) {
+            console.warn(`[consensus] Failed for ${smiles}. Spread ${maxAff - minAff} > 0.5`);
+            consensusPassed = false;
+            break;
+          }
+        }
+        
+        if (consensusPassed) {
+          console.log(`[result] ✓ ${batchId} PASSED consensus with ${CONSENSUS_K} nodes`);
+          
+          // Use the average affinity from the payload of the first node as representative
+          const representativeResults = chunk.results[0].payload.map(res => {
+            const allAffinities = smilesMap.get(res.smiles);
+            const avg = allAffinities.reduce((a, b) => a + b, 0) / allAffinities.length;
+            return { smiles: res.smiles, affinity: avg, source: res.source };
+          });
+          
+          updateMoleculeLeaderboard(representativeResults).catch(err => {
+            console.error('[leaderboard] Update error:', err);
+          });
+          
+          // Award credits to all participating nodes
+          for (const submission of chunk.results) {
+            if (submission.userId) {
+              await awardCredits(submission.userId, batchId, chunkSize, computeMs || 0);
+              
+              const nodeSocket = nodes.get(submission.socketId);
+              if (nodeSocket) {
+                io.to(submission.socketId).emit('user_info', {
+                  username: nodeSocket.username,
+                  credits: nodeSocket.credits,
+                  isAuthenticated: !!nodeSocket.userId,
+                });
+              }
+            }
+          }
+        } else {
+          console.warn(`[result] ✗ ${batchId} FAILED consensus. Requeuing chunk.`);
+          // Drop all assignments for this chunk so it can be picked up again
+          chunk.assignedNodes.clear();
+          chunk.results = [];
+          chunk.status = 'unassigned';
+          chunkManager.unassignedQueue.push(batchId);
+          chunkManager.completedChunks--;
+        }
+
         emitScreeningProgress(io);
         checkRunComplete(io);
 

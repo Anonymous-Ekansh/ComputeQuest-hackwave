@@ -6,7 +6,7 @@
  *   - INFERENCE_PIPELINE: plans stages across available nodes
  */
 
-const { LLM_MAX_STAGES, SCREENING_CHUNK_SIZE, DOCKING_TIMEOUT_MS } = require('../../shared/constants');
+const { LLM_MAX_STAGES, SCREENING_CHUNK_SIZE, DOCKING_TIMEOUT_MS, CONSENSUS_K } = require('../../shared/constants');
 
 class ChunkManager {
   constructor() {
@@ -35,9 +35,9 @@ class ChunkManager {
       this.chunks.set(chunkId, {
         chunkId,
         molecules: slice,
-        status: 'unassigned',
-        assignedNode: null,
-        timeout: null,
+        status: 'unassigned', // unassigned | in_progress | done
+        assignedNodes: new Map(), // socketId -> { userId, timeout, status: 'pending'|'done' }
+        results: [],
         retries: 0
       });
 
@@ -55,74 +55,113 @@ class ChunkManager {
   getNextChunkForNode(socketId, userId) {
     if (this.unassignedQueue.length === 0) return null;
 
-    const chunkId = this.unassignedQueue.shift();
-    const chunk = this.chunks.get(chunkId);
-
-    if (!chunk || chunk.status !== 'unassigned') {
-      return this.getNextChunkForNode(socketId, userId); // recursive call to skip stale
+    // Find the first chunk that hasn't been assigned to this user and needs more assignments
+    for (let i = 0; i < this.unassignedQueue.length; i++) {
+      const chunkId = this.unassignedQueue[i];
+      const chunk = this.chunks.get(chunkId);
+      
+      if (!chunk || chunk.status === 'done') {
+        this.unassignedQueue.splice(i, 1);
+        i--;
+        continue;
+      }
+      
+      let userAlreadyAssigned = false;
+      for (const [sId, info] of chunk.assignedNodes.entries()) {
+        if (info.userId === userId || sId === socketId) {
+          userAlreadyAssigned = true;
+          break;
+        }
+      }
+      
+      if (!userAlreadyAssigned) {
+        // If assigning this node will reach CONSENSUS_K, remove it from unassigned queue
+        if (chunk.assignedNodes.size + 1 >= CONSENSUS_K) {
+          this.unassignedQueue.splice(i, 1);
+        }
+        return chunk;
+      }
     }
-
-    return chunk;
+    
+    return null; // No available chunks for this user
   }
 
   assignNode(chunkId, socketId, userId) {
     const chunk = this.chunks.get(chunkId);
     if (!chunk) return;
 
-    chunk.status = 'assigned';
-    chunk.assignedNode = socketId;
+    chunk.status = 'in_progress';
     
-    chunk.timeout = setTimeout(() => {
-      this.handleTimeout(chunkId);
+    const timeout = setTimeout(() => {
+      this.handleTimeout(chunkId, socketId);
     }, DOCKING_TIMEOUT_MS);
+    
+    chunk.assignedNodes.set(socketId, { userId, timeout, status: 'pending' });
 
     console.log(`[taskQueue] Assigned ${socketId} to ${chunkId}`);
   }
 
-  handleTimeout(chunkId) {
+  handleTimeout(chunkId, socketId) {
     const chunk = this.chunks.get(chunkId);
-    if (!chunk || chunk.status !== 'assigned') return;
+    if (!chunk || chunk.status === 'done') return;
     
+    const nodeInfo = chunk.assignedNodes.get(socketId);
+    if (!nodeInfo || nodeInfo.status !== 'pending') return;
+    
+    chunk.assignedNodes.delete(socketId);
     chunk.retries++;
-    chunk.status = 'unassigned';
-    chunk.assignedNode = null;
-    chunk.timeout = null;
     
-    if (chunk.retries > 3) {
+    if (chunk.retries > (CONSENSUS_K * 3)) {
       console.error(`[taskQueue] Chunk ${chunkId} exceeded max retries, dropping.`);
       chunk.status = 'done';
       this.completedChunks++;
     } else {
-      this.unassignedQueue.push(chunkId);
+      // Re-add to unassigned queue if it was removed
+      if (!this.unassignedQueue.includes(chunkId)) {
+        this.unassignedQueue.push(chunkId);
+      }
       console.log(`[taskQueue] Requeued ${chunkId} due to timeout (retry ${chunk.retries})`);
     }
   }
 
-  recordResult(chunkId, socketId) {
+  recordResult(chunkId, socketId, resultsPayload, userId) {
     const chunk = this.chunks.get(chunkId);
-    if (!chunk) return 'ignored';
-    if (chunk.status === 'done') return 'ignored';
+    if (!chunk || chunk.status === 'done') return { status: 'ignored' };
     
-    if (chunk.assignedNode !== socketId) {
+    const nodeInfo = chunk.assignedNodes.get(socketId);
+    if (!nodeInfo) {
       console.log(`[taskQueue] Ignoring result from unassigned node ${socketId} for ${chunkId}`);
-      return 'ignored';
+      return { status: 'ignored' };
     }
 
-    if (chunk.timeout) {
-      clearTimeout(chunk.timeout);
-      chunk.timeout = null;
+    if (nodeInfo.timeout) {
+      clearTimeout(nodeInfo.timeout);
+      nodeInfo.timeout = null;
     }
+    
+    nodeInfo.status = 'done';
+    chunk.results.push({ socketId, userId, payload: resultsPayload });
 
-    chunk.status = 'done';
-    this.completedChunks++;
-    return 'accepted';
+    if (chunk.results.length >= CONSENSUS_K) {
+      chunk.status = 'done';
+      this.completedChunks++;
+      
+      // Remove from unassigned queue if it's still there
+      const idx = this.unassignedQueue.indexOf(chunkId);
+      if (idx !== -1) this.unassignedQueue.splice(idx, 1);
+      
+      return { status: 'consensus_ready', chunk };
+    }
+    
+    return { status: 'accepted_partial' };
   }
 
   handleNodeDisconnect(socketId) {
     for (const [chunkId, chunk] of this.chunks) {
-      if (chunk.assignedNode === socketId && chunk.status === 'assigned') {
-        if (chunk.timeout) clearTimeout(chunk.timeout);
-        this.handleTimeout(chunkId); // forcibly timeout to requeue
+      const nodeInfo = chunk.assignedNodes.get(socketId);
+      if (nodeInfo && nodeInfo.status === 'pending') {
+        if (nodeInfo.timeout) clearTimeout(nodeInfo.timeout);
+        this.handleTimeout(chunkId, socketId); // forcibly timeout to requeue
       }
     }
   }
@@ -130,7 +169,7 @@ class ChunkManager {
   getProgress() {
     let inFlight = 0;
     for (const chunk of this.chunks.values()) {
-      if (chunk.status === 'assigned') inFlight++;
+      if (chunk.status === 'in_progress') inFlight += chunk.assignedNodes.size;
     }
 
     return {

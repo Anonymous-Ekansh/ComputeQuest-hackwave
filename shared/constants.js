@@ -28,11 +28,12 @@ const DOCKING_TIMEOUT_MS = 120_000;        // max ms to wait before requeuing a 
 const MIN_COMPUTE_MS_PER_MOLECULE = 50;    // timing sanity floor
 const SCREENING_CHUNK_SIZE = 5;            // molecules per chunk (Webina is slow)
 const CREDIT_BASE_RATE = 5;                // base credits per molecule in a chunk
+const CONSENSUS_K = 3;
 
 module.exports = {
   MOLECULE_BATCH_SIZE, TASK_TYPES, CARD_TYPES, TROPHY_WIN, TROPHY_LOSS, 
   DECK_SIZE, CREDITS_PER_CRYSTAL, CREDITS_PER_UPGRADE, MAX_UPGRADES_PER_CARD,
   LLM_LAYERS, LLM_HIDDEN_SIZE, LLM_MAX_STAGES,
   DOCKING_TIMEOUT_MS, MIN_COMPUTE_MS_PER_MOLECULE,
-  SCREENING_CHUNK_SIZE, CREDIT_BASE_RATE,
+  SCREENING_CHUNK_SIZE, CREDIT_BASE_RATE, CONSENSUS_K
 };

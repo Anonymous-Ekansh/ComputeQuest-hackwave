@@ -55,9 +55,9 @@ self.onmessage = async function (e) {
   const data = e.data;
   const type = data.type;
 
-  // ── MOLECULE SCREENING — ChemBERTa + cosine similarity ─────────────
+  // ── MOLECULE SCREENING — Webina Docking ─────────────
   if (type === 'molecule_batch') {
-    const { taskId, batchId, molecules, modelVersion, referenceAntibiotics, referenceEmbeddings } = data;
+    const { taskId, batchId, molecules, modelVersion } = data;
 
     const startTime = Date.now();
 
