@@ -10,8 +10,8 @@ async function initWebina() {
   console.log('[DockingWorker] Initializing Webina WASM...');
   
   try {
-    // Dynamically import the ES module
-    const module = await import('/webina.js');
+    // Dynamically import the ES module (bypassing Vite analysis)
+    const module = await import(/* @vite-ignore */ '/webina.js');
     webinaModule = await module.default({
       locateFile: (path) => {
         if (path.endsWith('.wasm')) return '/webina.wasm';
