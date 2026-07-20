@@ -7,15 +7,19 @@
 }
 
 .deck-header h3 {
+  font-family: var(--font-heading);
   font-size: 1.1rem;
-  color: #f1f5f9;
+  color: #fff;
   font-weight: 700;
   margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
 }
 
 .deck-subtitle {
+  font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: var(--text-muted);
+  color: #888;
 }
 
 /* Empty state */
@@ -31,14 +35,18 @@
 }
 
 .deck-empty-state h3 {
+  font-family: var(--font-heading);
   font-size: 1rem;
-  color: #94a3b8;
+  color: #fff;
   margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
 }
 
 .deck-empty-state p {
+  font-family: var(--font-mono);
   font-size: 0.85rem;
-  color: var(--text-muted);
+  color: #888;
   margin-bottom: 20px;
 }
 
@@ -52,14 +60,15 @@
 .empty-progress-track {
   width: 200px;
   height: 6px;
-  background: #1e293b;
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 3px;
   overflow: hidden;
 }
 
 .empty-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--color-game), var(--color-game));
+  background: var(--color-accent);
+  box-shadow: 0 0 8px rgba(57, 255, 20, 0.5);
   border-radius: 3px;
   transition: width 0.5s ease;
 }
@@ -71,15 +80,16 @@
 
 /* Deck slots */
 .deck-slots {
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid #1e293b;
-  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
   padding: 16px;
 }
 
 .deck-slots-label {
+  font-family: var(--font-heading);
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: #888;
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 12px;
@@ -109,8 +119,9 @@
 .deck-slot-placeholder {
   width: 140px;
   min-height: 190px;
-  border: 2px dashed #334155;
-  border-radius: 12px;
+  border: 1px dashed var(--color-border);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -158,38 +169,46 @@
 .deck-save-btn,
 .deck-battle-btn {
   padding: 10px 24px;
-  border: none;
-  border-radius: 8px;
-  font-family: inherit;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-family: var(--font-heading);
   font-size: 0.85rem;
-  font-weight: 600;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s ease;
 }
 
 .deck-save-btn {
-  background: var(--color-game);
-  color: #0f172a;
+  background: transparent;
+  color: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 .deck-save-btn:hover:not(:disabled) {
-  background: var(--color-game);
+  background: rgba(57, 255, 20, 0.1);
   transform: translateY(-1px);
+  box-shadow: 0 0 10px rgba(57, 255, 20, 0.4);
 }
 
 .deck-save-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  border-color: #555;
+  color: #555;
 }
 
 .deck-battle-btn {
-  background: linear-gradient(135deg, var(--color-positive), #16a34a);
+  background: transparent;
   color: #fff;
+  border-color: #fff;
 }
 
 .deck-battle-btn:hover {
-  background: linear-gradient(135deg, #4ade80, var(--color-positive));
+  background: rgba(255, 255, 255, 0.1);
   transform: translateY(-1px);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
 }
 
 /* Save message */
@@ -215,13 +234,14 @@
 
 /* Available cards grid */
 .deck-available {
-  border-top: 1px solid #1e293b;
+  border-top: 1px solid var(--color-border);
   padding-top: 20px;
 }
 
 .deck-available-label {
+  font-family: var(--font-heading);
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: #888;
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 12px;
@@ -245,6 +265,7 @@
 .deck-card-wrapper:not(.in-deck) .game-card:hover {
   transform: translateY(-4px);
   filter: brightness(1.15);
+  box-shadow: 0 0 15px rgba(255, 255, 255, 0.2);
 }
 
 .deck-card-wrapper.in-deck .game-card {
@@ -261,12 +282,13 @@
   bottom: 8px;
   left: 50%;
   transform: translateX(-50%);
+  font-family: var(--font-heading);
   font-size: 0.6rem;
-  color: var(--color-game);
-  background: rgba(15, 23, 42, 0.9);
+  font-weight: 700;
+  color: #000;
+  background: var(--color-accent);
   padding: 2px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(129, 140, 248, 0.3);
+  border-radius: 4px;
   white-space: nowrap;
 }
 

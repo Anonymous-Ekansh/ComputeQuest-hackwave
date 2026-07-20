@@ -69,7 +69,7 @@ const Leaderboard = () => {
               <tr>
                 <th>Rank</th>
                 <th>Node</th>
-                <th>{mode === 'contributors' ? 'Rows' : 'Trophies'}</th>
+                <th>{mode === 'contributors' ? 'Total Credits' : 'Trophies'}</th>
               </tr>
             </thead>
             <tbody>
