@@ -893,9 +893,11 @@ function setupSocketHandler(io) {
           username: node.username,
           credits: node.credits,
           isAuthenticated: true,
+          isEligibleForUpgrade: dbUser.can_upgrade ?? true,
           trophies,
           ownedCards: gameData.ownedCards,
           savedDeck: gameData.savedDeck,
+          upgrades: gameData.upgrades,
         });
       } catch (err) {
         console.error('[shop] Uncaught error:', err);

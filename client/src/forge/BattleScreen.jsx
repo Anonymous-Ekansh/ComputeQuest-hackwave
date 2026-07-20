@@ -274,6 +274,7 @@ export default function BattleScreen({
           trophies: trophies || 0,
         });
         const handler = (data) => {
+          clearTimeout(timeoutId);
           setServerConfirmed(true);
           setConfirmedData(data);
           if (data.tierEscalation) {
@@ -281,6 +282,13 @@ export default function BattleScreen({
           }
           socket.off('battle:result_confirmed', handler);
         };
+        
+        const timeoutId = setTimeout(() => {
+          setServerConfirmed(true);
+          setConfirmedData({ success: false, reason: 'Network timeout. Check connection.' });
+          socket.off('battle:result_confirmed', handler);
+        }, 8000);
+
         socket.on('battle:result_confirmed', handler);
       }
 
