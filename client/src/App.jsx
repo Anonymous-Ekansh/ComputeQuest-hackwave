@@ -273,9 +273,10 @@ function App() {
 
   return (
     <div className="app-shell">
-      {/* ── Left Sidebar (Compute Panel) ── */}
-      <aside className="sidebar">
-        <div className="sidebar-inner">
+      {/* ── Left Column (Node Telemetry) ── */}
+      <aside className="left-col">
+        <div className="sidebar">
+          <div className="panel-header">[SYS.OP.01] NODE TELEMETRY</div>
           <h1 className="sidebar-title">ComputeQuest</h1>
           <p className="tagline">Donate your browser's computing power</p>
 
@@ -368,12 +369,6 @@ function App() {
             </div>
           )}
 
-          {/* Global Inference Pipeline Visualization */}
-          <Dashboard socket={socketRef.current} />
-
-          {/* Leaderboard */}
-          <Leaderboard />
-
           {/* Device Benchmark Footer */}
           {userInfo.isAuthenticated && (isBenchmarking || deviceBenchmark) && (
             <div className="benchmark-footer">
@@ -387,9 +382,10 @@ function App() {
         </div>
       </aside>
 
-      {/* ── Right Panel (Main Content) ── */}
-      <main className="main-panel" style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
-        <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0 }}>
+      {/* ── Middle Column (The Forge + Distributed Screening) ── */}
+      <main className="middle-col">
+        <div className="forge-container">
+          <div className="panel-header">[SYS.OP.02] THE FORGE</div>
           <div style={{ flex: 1, position: 'relative', overflowY: 'auto' }}>
             <TheForge
               socket={socketRef.current}
@@ -397,18 +393,30 @@ function App() {
               isAuthenticated={userInfo.isAuthenticated}
             />
           </div>
-          
-          {/* HackWave AI Chat Panel */}
-          <div style={{ width: '300px', flexShrink: 0, height: '100%', overflowY: 'auto', borderLeft: '1px solid #27272a', background: '#09090b' }}>
-            <ChatPanel socket={socketRef.current} />
-          </div>
         </div>
         
-        {/* Research Panel at Bottom */}
-        <div style={{ flexShrink: 0 }}>
-          <ResearchPanel topMolecules={topMolecules} screeningProgress={screeningProgress} />
+        <div className="research-container">
+          <div className="panel-header">[SYS.OP.03] DISTRIBUTED SCREENING</div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <ResearchPanel topMolecules={topMolecules} screeningProgress={screeningProgress} />
+          </div>
         </div>
       </main>
+
+      {/* ── Right Column (Hackwave AI + Leaderboard) ── */}
+      <aside className="right-col">
+        <div className="chat-container">
+          <div className="panel-header">[SYS.OP.04] HACKWAVE AI</div>
+          <ChatPanel socket={socketRef.current} />
+        </div>
+        
+        <div className="leaderboard-container">
+          <div className="panel-header">[SYS.OP.05] GLOBAL NETWORK</div>
+          <div style={{ flex: 1, position: 'relative', overflowY: 'auto' }}>
+            <Leaderboard />
+          </div>
+        </div>
+      </aside>
     </div>
   );
 }

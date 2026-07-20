@@ -13,7 +13,7 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
       <div className="research-header">
         <h3>Research Panel: Distributed Drug Screening</h3>
         <p className="explainer">
-          Your browser is running a ChemBERTa ML model to screen candidate molecules by structural similarity to known antibiotics — verified by consensus across multiple independent nodes.
+          Your browser is running a ChemBERTa ML model to screen candidate molecules by structural similarity to known antibiotics.
         </p>
       </div>
 

@@ -48,7 +48,7 @@
 }
 
 .battle-disabled-msg {
-  color: #64748b !important;
+  color: var(--text-muted) !important;
 }
 
 .battle-trophy-display {
@@ -77,7 +77,7 @@
   letter-spacing: 0.5px;
 }
 
-.battle-bot-preview { font-size: 0.8rem; color: #64748b; }
+.battle-bot-preview { font-size: 0.8rem; color: var(--text-muted); }
 
 .bot-label {
   padding: 4px 12px;
@@ -100,7 +100,7 @@
 }
 
 .battle-start-btn {
-  background: linear-gradient(135deg, #ef4444, #dc2626);
+  background: linear-gradient(135deg, var(--color-error), #dc2626);
   color: #fff;
   box-shadow: 0 4px 20px rgba(239, 68, 68, 0.3);
 }
@@ -118,7 +118,7 @@
 
 .battle-edit-btn:hover {
   background: #334155;
-  color: #e2e8f0;
+  color: var(--text-main);
 }
 
 /* ── Ready / Matchup ────────────────────────────────────────────────────────── */
@@ -166,7 +166,7 @@
 .matchup-vs {
   font-size: 1.5rem;
   font-weight: 800;
-  color: #ef4444;
+  color: var(--color-error);
   text-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
   animation: vsPulse 1.5s ease-in-out infinite;
 }
@@ -178,7 +178,7 @@
 
 .battle-go-btn {
   padding: 14px 40px;
-  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  background: linear-gradient(135deg, var(--color-error), #b91c1c);
   color: #fff;
   border: none;
   border-radius: 10px;
@@ -220,9 +220,9 @@
   font-weight: 600;
 }
 
-.player-hud .hud-label { color: #22c55e; }
+.player-hud .hud-label { color: var(--color-positive); }
 .player-hud .hud-count { color: #86efac; }
-.bot-hud .hud-label { color: #ef4444; }
+.bot-hud .hud-label { color: var(--color-error); }
 .bot-hud .hud-count { color: #fca5a5; }
 
 /* Arena container */
@@ -456,7 +456,7 @@
   right: -6px;
   width: 14px;
   height: 14px;
-  background: #818cf8;
+  background: var(--color-game);
   color: #000;
   font-size: 0.55rem;
   font-weight: 800;
@@ -601,9 +601,9 @@
 }
 
 .char-select-btn.active {
-  border-color: #818cf8;
+  border-color: var(--color-game);
   background: rgba(129, 140, 248, 0.1);
-  color: #e2e8f0;
+  color: var(--text-main);
   box-shadow: 0 0 8px rgba(129, 140, 248, 0.2);
 }
 
@@ -627,7 +627,7 @@
 }
 
 .char-select-btn.active .csb-num {
-  background: #818cf8;
+  background: var(--color-game);
   color: #000;
 }
 
@@ -688,8 +688,8 @@
   100% { transform: scale(1); }
 }
 
-.battle-result.victory h2 { color: #22c55e; font-size: 1.5rem; }
-.battle-result.defeat h2  { color: #ef4444; font-size: 1.5rem; }
+.battle-result.victory h2 { color: var(--color-positive); font-size: 1.5rem; }
+.battle-result.defeat h2  { color: var(--color-error); font-size: 1.5rem; }
 
 /* Trophy change */
 .trophy-change {
@@ -717,16 +717,16 @@
   font-variant-numeric: tabular-nums;
 }
 
-.delta-number.positive { color: #22c55e; }
-.delta-number.negative { color: #ef4444; }
+.delta-number.positive { color: var(--color-positive); }
+.delta-number.negative { color: var(--color-error); }
 
-.new-trophy-count { font-size: 0.75rem; color: #64748b; }
+.new-trophy-count { font-size: 0.75rem; color: var(--text-muted); }
 
 .trophy-pending {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #64748b;
+  color: var(--text-muted);
   font-size: 0.8rem;
 }
 
@@ -734,7 +734,7 @@
   width: 16px;
   height: 16px;
   border: 2px solid rgba(129, 140, 248, 0.2);
-  border-top-color: #818cf8;
+  border-top-color: var(--color-game);
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
@@ -768,7 +768,7 @@
 
 .battle-again-btn {
   padding: 10px 24px;
-  background: linear-gradient(135deg, #ef4444, #dc2626);
+  background: linear-gradient(135deg, var(--color-error), #dc2626);
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -799,7 +799,7 @@
 
 .result-nav-btn:hover {
   background: #334155;
-  color: #e2e8f0;
+  color: var(--text-main);
 }
 
 /* ── Mobile ─────────────────────────────────────────────────────────────────── */

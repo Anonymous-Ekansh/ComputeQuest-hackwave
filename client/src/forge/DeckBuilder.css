@@ -15,7 +15,7 @@
 
 .deck-subtitle {
   font-size: 0.8rem;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 /* Empty state */
@@ -38,7 +38,7 @@
 
 .deck-empty-state p {
   font-size: 0.85rem;
-  color: #64748b;
+  color: var(--text-muted);
   margin-bottom: 20px;
 }
 
@@ -59,14 +59,14 @@
 
 .empty-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #818cf8, #6366f1);
+  background: linear-gradient(90deg, var(--color-game), var(--color-game));
   border-radius: 3px;
   transition: width 0.5s ease;
 }
 
 .empty-progress span {
   font-size: 0.75rem;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 /* Deck slots */
@@ -79,7 +79,7 @@
 
 .deck-slots-label {
   font-size: 0.75rem;
-  color: #64748b;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 12px;
@@ -135,7 +135,7 @@
   right: -6px;
   width: 22px;
   height: 22px;
-  background: #ef4444;
+  background: var(--color-error);
   color: #fff;
   border-radius: 50%;
   display: flex;
@@ -168,12 +168,12 @@
 }
 
 .deck-save-btn {
-  background: #818cf8;
+  background: var(--color-game);
   color: #0f172a;
 }
 
 .deck-save-btn:hover:not(:disabled) {
-  background: #a5b4fc;
+  background: var(--color-game);
   transform: translateY(-1px);
 }
 
@@ -183,12 +183,12 @@
 }
 
 .deck-battle-btn {
-  background: linear-gradient(135deg, #22c55e, #16a34a);
+  background: linear-gradient(135deg, var(--color-positive), #16a34a);
   color: #fff;
 }
 
 .deck-battle-btn:hover {
-  background: linear-gradient(135deg, #4ade80, #22c55e);
+  background: linear-gradient(135deg, #4ade80, var(--color-positive));
   transform: translateY(-1px);
 }
 
@@ -221,7 +221,7 @@
 
 .deck-available-label {
   font-size: 0.75rem;
-  color: #64748b;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 12px;
@@ -262,7 +262,7 @@
   left: 50%;
   transform: translateX(-50%);
   font-size: 0.6rem;
-  color: #818cf8;
+  color: var(--color-game);
   background: rgba(15, 23, 42, 0.9);
   padding: 2px 8px;
   border-radius: 10px;

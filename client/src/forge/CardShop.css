@@ -15,7 +15,7 @@
 
 .shop-subtitle {
   font-size: 0.8rem;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 /* Rarity filter bar */
@@ -42,13 +42,13 @@
 
 .filter-btn:hover {
   border-color: #334155;
-  color: #e2e8f0;
+  color: var(--text-main);
 }
 
 .filter-btn.active {
   background: rgba(129, 140, 248, 0.15);
   border-color: rgba(129, 140, 248, 0.4);
-  color: #818cf8;
+  color: var(--color-game);
 }
 
 .filter-cost {
@@ -105,7 +105,7 @@
   width: 28px;
   height: 28px;
   border: 3px solid rgba(129, 140, 248, 0.2);
-  border-top-color: #818cf8;
+  border-top-color: var(--color-game);
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }

@@ -1,19 +1,20 @@
 .research-panel {
-  background: #111113;
-  border-top: 1px solid #27272a;
-  padding: 16px 24px;
+  display: flex;
+  flex-direction: column;
 }
 
 .research-header h3 {
   margin: 0 0 4px 0;
+  font-family: var(--font-heading);
   font-size: 14px;
-  color: #e4e4e7;
+  color: #fff;
+  text-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
 }
 
 .research-header .explainer {
   margin: 0 0 12px 0;
   font-size: 11px;
-  color: #71717a;
+  color: #888;
   line-height: 1.4;
 }
 
@@ -30,16 +31,19 @@
 
 .stat-item {
   font-size: 12px;
-  color: #a1a1aa;
+  color: #888;
+  font-family: var(--font-heading);
+  text-transform: uppercase;
 }
 
 .stat-item strong {
-  color: #818cf8;
+  color: var(--color-accent);
   font-size: 14px;
+  font-family: var(--font-mono);
 }
 
 .stat-item small {
-  color: #71717a;
+  color: #666;
   margin-left: 2px;
 }
 
@@ -90,22 +94,24 @@
 .research-panel th {
   text-align: left;
   padding: 6px 8px;
-  color: #71717a;
-  font-weight: 500;
-  border-bottom: 1px solid #27272a;
+  color: #888;
+  font-weight: 700;
+  border-bottom: 1px solid var(--color-border);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  font-family: var(--font-heading);
 }
 
 .research-panel td {
   padding: 6px 8px;
   color: #d4d4d8;
-  border-bottom: 1px solid #1a1a1c;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  font-family: var(--font-mono);
 }
 
 .research-panel tr:hover td {
-  background: #18181b;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .mol-name {
@@ -121,14 +127,16 @@
 /* Progress track reuse */
 .screening-stats .progress-track {
   height: 4px;
-  background: #27272a;
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 2px;
   overflow: hidden;
+  margin-top: 6px;
 }
 
 .screening-stats .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #818cf8, #6366f1);
+  background: var(--color-accent);
+  box-shadow: 0 0 8px var(--color-accent);
   border-radius: 2px;
   transition: width 0.5s ease;
 }
