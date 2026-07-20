@@ -21,7 +21,6 @@ function App() {
   // Molecule screening states
   const [screeningProgress, setScreeningProgress] = useState(null);
   const [topMolecules, setTopMolecules] = useState([]);
-  const [targetConfig, setTargetConfig] = useState(null);
 
   const [userInfo, setUserInfo] = useState({
     username: 'Anonymous Node',
@@ -61,7 +60,7 @@ function App() {
     }
   }, [userInfo.isAuthenticated, connected, deviceBenchmark, isBenchmarking]);
 
-  // Fetch molecule leaderboard data
+  // Fetch molecule leaderboard + screening progress
   const fetchResearchData = async () => {
     try {
       const serverUrl = import.meta.env.VITE_SERVER_URL || SERVER_URL || '';
@@ -69,7 +68,7 @@ function App() {
       if (res.ok) {
         const data = await res.json();
         setTopMolecules(data.topMolecules || []);
-        if (data.targetConfig) setTargetConfig(data.targetConfig);
+        if (data.progress) setScreeningProgress(prev => ({ ...prev, ...data.progress }));
       }
     } catch (err) {
       console.error('Failed to fetch research data:', err);
@@ -333,12 +332,12 @@ function App() {
 
               <div className="stats">
                 <div className="stat-card">
-                  <div className="stat-value">{screeningProgress?.moleculesScored || 0}</div>
-                  <div className="stat-label">Mols Scored</div>
+                  <div className="stat-value">{screeningProgress?.moleculesVerified || screeningProgress?.moleculesScored || 0}</div>
+                  <div className="stat-label">Verified</div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-value">
-                    {topMolecules.length > 0 ? topMolecules[0].composite_score.toFixed(3) : '-'}
+                    {topMolecules.length > 0 ? (topMolecules[0].similarity ?? topMolecules[0].composite_score)?.toFixed(3) : '-'}
                   </div>
                   <div className="stat-label">Top Score</div>
                 </div>
@@ -407,7 +406,7 @@ function App() {
         
         {/* Research Panel at Bottom */}
         <div style={{ flexShrink: 0 }}>
-          <ResearchPanel topMolecules={topMolecules} targetConfig={targetConfig} />
+          <ResearchPanel topMolecules={topMolecules} screeningProgress={screeningProgress} />
         </div>
       </main>
     </div>

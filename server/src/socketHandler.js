@@ -1,8 +1,23 @@
-const { MOLECULE_BATCH_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS, DECK_SIZE, CREDITS_PER_CRYSTAL, LLM_LAYERS } = require('../../shared/constants');
+/**
+ * server/src/socketHandler.js
+ *
+ * WebSocket event handling for ComputeQuest:
+ *   - Distributed molecular screening with k=3 consensus verification
+ *   - LLM inference pipeline (Request-Parallel)
+ *   - The Forge card game events
+ *   - Credit system gated on consensus-verified work
+ */
+
+const {
+  MOLECULE_BATCH_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS,
+  DECK_SIZE, CREDITS_PER_CRYSTAL, LLM_LAYERS,
+  CONSENSUS_K, SCREENING_CHUNK_SIZE, CREDIT_BASE_RATE,
+} = require('../../shared/constants');
 const { CARD_MAP } = require('../../shared/cards');
 const { getTokenizer } = require('./tokenizer');
-const { planStages, planMoleculeBatches } = require('./taskQueue');
-const { scoreMolecule } = require('./molecularScorer');
+const { ChunkManager, planStages } = require('./taskQueue');
+const { checkConsensus, isTimingPlausible, updateReputation, getReputationMultiplier } = require('./consensus');
+const { loadModelConfig, getModelInfo, getModelVersion, getReferenceAntibiotics } = require('./modelRegistry');
 const { getBotTier } = require('../../shared/bots');
 const { simulateBattle } = require('../../shared/battleLogic');
 const fs = require('fs');
@@ -11,10 +26,9 @@ const path = require('path');
 
 // ── constants ────────────────────────────────────────────────────────────────
 
-const BASE_TIMEOUT_MS = 30_000;          // scaled by complexity + node speed
-const MAX_CHUNK_RETRIES = 3;             // per-batch retry cap before task:failed
-const DEADLINE_SCAN_INTERVAL_MS = 2_000; // how often we scan for overdue batches
-const SPOT_CHECK_TOLERANCE = 0.01;       // max allowed score delta for spot-checks
+const BASE_TIMEOUT_MS = 60_000;          // longer timeout for ChemBERTa inference
+const MAX_CHUNK_RETRIES = 3;
+const DEADLINE_SCAN_INTERVAL_MS = 5_000;
 
 const usersFilePath = path.join(__dirname, '..', 'data', 'users.json');
 
@@ -98,7 +112,6 @@ async function loadUserTrophies(userId) {
 async function saveUsers(usersData) {
   if (supabase) {
     try {
-      // Upsert all users into Supabase
       const { error } = await supabase.from('users').upsert(
         usersData.map(u => ({
           id: u.id,
@@ -140,12 +153,10 @@ async function incrementUserCredits(userId, amount) {
     });
 
     if (error) throw error;
-    // data should contain { credits, total_contributed }
-    // supabase.rpc returns an array of objects when returning a table/record
     return data && data.length > 0 ? data[0] : null;
   }
 
-  // Local fallback with an in-memory lock/queue to prevent interleaved writes
+  // Local fallback with an in-memory lock/queue
   return new Promise((resolve, reject) => {
     writeQueue = writeQueue.then(async () => {
       try {
@@ -168,7 +179,7 @@ async function incrementUserCredits(userId, amount) {
 
 // ── state stores ─────────────────────────────────────────────────────────────
 
-// socketId -> { id, userId, username, connectedAt, tasksCompleted, credits, status: 'idle'|'busy' }
+// socketId -> { id, userId, username, connectedAt, tasksCompleted, credits, status }
 const nodes = new Map();
 
 // socketId -> { avgMsPerBatch, samples }
@@ -176,39 +187,21 @@ const nodePerformance = new Map();
 
 // ── molecule screening state ─────────────────────────────────────────────────
 
-// Loaded once at startup from server/data/
 let moleculeLibrary = [];
-let targetConfig = {};
+const chunkManager = new ChunkManager();
 
-// The current screening run
-let currentRunId = null;
-// FIFO queue of batches waiting for idle nodes: { batchId, molecules }
-let batchQueue = [];
-// Total batches in the current run (for progress tracking)
-let totalBatchCount = 0;
-
-// batchId -> { socketId, userId, username, deadline, retries, molecules }
-const pendingBatches = new Map();
-
-// batches that timed out with no idle node — requeued for next idle
-// { batchId }
-const requeuedBatches = [];
-
-// Completed batch count for current run
-let completedBatchCount = 0;
-
-// Top-100 molecule leaderboard (in-memory, persisted to Supabase)
-// Array of { smiles, name, id, composite_score, mw, logp, hbd, hba, rotatable_bonds, druglikeness_score, complementarity_score }
+// Top-100 molecule leaderboard (consensus-verified only)
 let topMolecules = [];
 const TOP_MOLECULES_LIMIT = 100;
 
+// Aggregate stats
+let totalVerifiedComputeSeconds = 0;
+
 // ── pipeline state ───────────────────────────────────────────────────────────
-// sessionId -> { stages: [ {stageIndex, socketId, ...} ], activeNodes: Set<socketId>, promptTokens: number[], currentTokenIndex: number, posOff: number }
 const activePipelines = new Map();
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/** Get all node IDs that are currently idle */
 function getIdleNodeIds(requireInference = false) {
   const idle = [];
   for (const [id, node] of nodes) {
@@ -220,30 +213,24 @@ function getIdleNodeIds(requireInference = false) {
   return idle;
 }
 
-/** Mark a node as busy */
 function markBusy(socketId) {
   const node = nodes.get(socketId);
   if (node) node.status = 'busy';
 }
 
-/** Mark a node as idle and trigger dispatch checks */
 function markIdle(socketId, io) {
   const node = nodes.get(socketId);
   if (!node || node.status === 'unauthenticated') return;
   node.status = 'idle';
-  // demand-driven: immediately try to hand out queued work
-  drainRequeued(io);
   tryDispatchNext(io);
 }
 
-/** Mark idle WITHOUT triggering dispatch (avoids recursion in timeout handler) */
 function markIdleSilent(socketId) {
   const node = nodes.get(socketId);
   if (!node || node.status === 'unauthenticated') return;
   node.status = 'idle';
 }
 
-/** Get the fastest idle node by avgMsPerBatch (lowest = fastest) */
 function getFastestIdleNode(customIds = null) {
   const idle = customIds || getIdleNodeIds();
   if (idle.length === 0) return null;
@@ -261,27 +248,13 @@ function getFastestIdleNode(customIds = null) {
   return best;
 }
 
-/**
- * Adaptive timeout for a batch on a given node.
- * Clamped to [5_000, 120_000] ms.
- */
-function adaptiveTimeout(socketId) {
-  const perf = nodePerformance.get(socketId);
-  const avgMs = perf ? Math.max(perf.avgMsPerBatch, 100) : BASE_TIMEOUT_MS;
-  // Give 3× the average observed time, or the base timeout, whichever is larger
-  const scaled = Math.max(BASE_TIMEOUT_MS, avgMs * 3);
-  return Math.max(5_000, Math.min(120_000, scaled));
-}
-
 // ── molecule screening lifecycle ─────────────────────────────────────────────
 
 /**
- * Load molecule library and target config from disk.
- * Called once at server startup.
+ * Load molecule library from disk. No server-side scoring — that happens on nodes.
  */
 function loadScreeningData() {
   const libPath = path.join(__dirname, '..', 'data', 'molecule_library.json');
-  const targetPath = path.join(__dirname, '..', 'data', 'target.json');
 
   try {
     const libRaw = JSON.parse(fs.readFileSync(libPath, 'utf-8'));
@@ -291,401 +264,230 @@ function loadScreeningData() {
     console.error('[screening] Failed to load molecule_library.json:', err.message);
     moleculeLibrary = [];
   }
-
-  try {
-    targetConfig = JSON.parse(fs.readFileSync(targetPath, 'utf-8'));
-    console.log(`[screening] Loaded target: ${targetConfig.target_name} (${targetConfig.pdb_id})`);
-  } catch (err) {
-    console.error('[screening] Failed to load target.json:', err.message);
-    targetConfig = {};
-  }
 }
 
 /**
- * Pre-score all molecules server-side on startup.
- * This populates the in-memory leaderboard and Supabase immediately,
- * so the Research Panel always shows data even if no clients have connected.
+ * Start a screening run. Chunks the library and queues for k=3 assignment.
  */
-async function preScoreOnServer() {
-  if (moleculeLibrary.length === 0 || !targetConfig.pdb_id) {
-    console.warn('[pre-score] Skipping: no molecules or target loaded');
+function startScreeningRun(io) {
+  if (moleculeLibrary.length === 0) {
+    console.warn('[screening] No molecules loaded — cannot start run');
     return;
   }
 
-  console.log(`[pre-score] Scoring ${moleculeLibrary.length} molecules server-side...`);
-  const startTime = Date.now();
-  const scored = [];
+  chunkManager.initRun(moleculeLibrary, SCREENING_CHUNK_SIZE);
 
-  for (const mol of moleculeLibrary) {
-    if (!mol || !mol.smiles) continue;
-    try {
-      const result = await scoreMolecule(mol.smiles, targetConfig);
-      if (result && typeof result.composite_score === 'number') {
-        result.name = mol.name || undefined;
-        result.molecule_id = mol.id || undefined;
-        result.is_known_reference = mol.is_known_reference === true;
-        scored.push(result);
-      }
-    } catch (err) {
-      // skip individual failures silently
-    }
-  }
-
-  const elapsed = Date.now() - startTime;
-  console.log(`[pre-score] Scored ${scored.length}/${moleculeLibrary.length} molecules in ${elapsed}ms`);
-
-  // Populate in-memory leaderboard
-  topMolecules = scored
-    .sort((a, b) => b.composite_score - a.composite_score)
-    .slice(0, TOP_MOLECULES_LIMIT);
-
-  console.log(`[pre-score] Top score: ${topMolecules[0]?.composite_score?.toFixed(4) || 'N/A'} (${topMolecules[0]?.name || topMolecules[0]?.smiles?.slice(0,30) || 'N/A'})`);
-
-  // Persist to Supabase
-  if (supabase && scored.length > 0) {
-    try {
-      const BATCH_SIZE = 50; // Supabase has payload limits
-      for (let i = 0; i < scored.length; i += BATCH_SIZE) {
-        const batch = scored.slice(i, i + BATCH_SIZE).map(m => ({
-          smiles: m.smiles,
-          molecule_name: m.name || null,
-          is_known_reference: m.is_known_reference || false,
-          mw: m.mw,
-          logp: m.logp,
-          hbd: m.hbd,
-          hba: m.hba,
-          rotatable_bonds: m.rotatable_bonds,
-          druglikeness_score: m.druglikeness_score,
-          complementarity_score: m.complementarity_score,
-          composite_score: m.composite_score,
-          scored_by_user_id: null,
-        }));
-
-        const { error } = await supabase
-          .from('molecule_scores')
-          .upsert(batch, { onConflict: 'smiles' });
-
-        if (error) {
-          console.error(`[pre-score] Supabase upsert error (batch ${i}):`, error.message, error.details);
-        }
-      }
-      console.log(`[pre-score] Persisted ${scored.length} molecules to Supabase`);
-    } catch (err) {
-      console.error('[pre-score] Supabase persist error:', err.message || err);
-    }
-  }
-}
-
-/**
- * Start (or restart) a screening run.
- * Builds the batch queue from the full molecule library.
- */
-function startScreeningRun(io) {
-  currentRunId = `screen_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const batches = planMoleculeBatches(moleculeLibrary, MOLECULE_BATCH_SIZE);
-  batchQueue = [...batches];
-  totalBatchCount = batches.length;
-  completedBatchCount = 0;
-
-  console.log(`[screening] Started run ${currentRunId}: ${totalBatchCount} batches, ${moleculeLibrary.length} molecules`);
+  console.log(`[screening] Started run ${chunkManager.runId}`);
 
   io.emit('screening:status', {
-    runId: currentRunId,
-    totalBatches: totalBatchCount,
-    completedBatches: 0,
-    totalMolecules: moleculeLibrary.length,
+    runId: chunkManager.runId,
+    ...chunkManager.getProgress(),
     status: 'running',
   });
 }
 
 /**
- * Core scheduling loop — triggered after every state change.
- * Dispatches the next queued batch to an idle node.
- * Unlike MATRIX_MULTIPLY, multiple batches can be in-flight simultaneously
- * (one per idle node).
+ * Core dispatch loop — assigns chunks to idle nodes.
+ * Each chunk goes to up to k=3 different nodes.
  */
 function tryDispatchNext(io) {
-  // Keep dispatching while we have both idle nodes and pending batches
-  while (true) {
-    if (batchQueue.length === 0) break;
-
+  let dispatched = true;
+  while (dispatched) {
+    dispatched = false;
     const idleNode = getFastestIdleNode();
     if (!idleNode) break;
 
     const node = nodes.get(idleNode);
     if (!node || node.status === 'unauthenticated') break;
 
-    const batch = batchQueue.shift();
-    dispatchBatch(io, batch, idleNode);
+    const chunk = chunkManager.getNextChunkForNode(idleNode, node.userId);
+    if (!chunk) break;
+
+    dispatchChunk(io, chunk, idleNode);
+    dispatched = true;
   }
 }
 
-/** Dispatch a single batch to a specific node */
-function dispatchBatch(io, batch, socketId) {
-  const { batchId, molecules } = batch;
+/**
+ * Dispatch a chunk to a specific node.
+ */
+function dispatchChunk(io, chunk, socketId) {
   const node = nodes.get(socketId);
-  const deadline = Date.now() + adaptiveTimeout(socketId);
-
-  pendingBatches.set(batchId, {
-    socketId,
-    userId: node ? node.userId : null,
-    username: node ? node.username : 'Anonymous Node',
-    deadline,
-    retries: 0,
-    molecules,
-  });
-
+  chunkManager.assignNode(chunk.chunkId, socketId, node?.userId);
   markBusy(socketId);
 
+  // Send chunk with reference antibiotics so node can compute similarity
+  const modelInfo = getModelInfo();
+
   io.to(socketId).emit('molecule_batch', {
-    taskId: currentRunId,
-    batchId,
-    molecules,
-    target: targetConfig,
+    taskId: chunkManager.runId,
+    batchId: chunk.chunkId,
+    molecules: chunk.molecules,
+    modelVersion: getModelVersion(),
+    referenceAntibiotics: modelInfo.referenceAntibiotics,
+    referenceEmbeddings: modelInfo.referenceEmbeddings,
   });
 
   console.log(
-    `[dispatch] Batch ${batchId} (${molecules.length} mols) → ${socketId} ` +
+    `[dispatch] Chunk ${chunk.chunkId} (${chunk.molecules.length} mols) → ${socketId} ` +
     `(${node ? node.username : 'anon'})`,
   );
-}
-
-// ── deadline scanner ─────────────────────────────────────────────────────────
-
-function scanDeadlines(io) {
-  const now = Date.now();
-
-  for (const [batchId, meta] of pendingBatches) {
-    if (now < meta.deadline) continue;
-
-    // ── overdue ──
-    meta.retries++;
-    console.log(
-      `[timeout] Batch ${batchId} on ${meta.socketId} overdue ` +
-      `(retry ${meta.retries}/${MAX_CHUNK_RETRIES})`,
-    );
-
-    if (meta.retries > MAX_CHUNK_RETRIES) {
-      // Give up on this batch — remove it and log
-      console.error(`[FAILED] Batch ${batchId} exceeded ${MAX_CHUNK_RETRIES} retries, skipping`);
-      markIdleSilent(meta.socketId);
-      pendingBatches.delete(batchId);
-      completedBatchCount++; // count as "done" to avoid blocking the run
-      emitScreeningProgress(io);
-      checkRunComplete(io);
-      continue;
-    }
-
-    // mark the old node idle (it's apparently stuck)
-    markIdleSilent(meta.socketId);
-
-    // try to reassign
-    const replacement = getFastestIdleNode();
-    if (replacement) {
-      reassignBatch(batchId, replacement, io);
-    } else {
-      // no idle node → requeue for the next available one
-      meta.deadline = Infinity; // stop re-triggering until reassigned
-      requeuedBatches.push({ batchId });
-      console.log(`[requeue] Batch ${batchId} queued for next idle node`);
-    }
-  }
-}
-
-/** Reassign a single batch to a new node */
-function reassignBatch(batchId, socketId, io) {
-  const meta = pendingBatches.get(batchId);
-  if (!meta) return;
-
-  const replacementNode = nodes.get(socketId);
-  meta.socketId = socketId;
-  meta.userId = replacementNode ? replacementNode.userId : null;
-  meta.username = replacementNode ? replacementNode.username : 'Anonymous Node';
-  meta.deadline = Date.now() + adaptiveTimeout(socketId);
-
-  if (!replacementNode || replacementNode.status === 'unauthenticated') {
-    console.warn(`[reassign] Refusing to reassign batch to unauthenticated socket ${socketId}`);
-    return;
-  }
-
-  markBusy(socketId);
-  io.to(socketId).emit('molecule_batch', {
-    taskId: currentRunId,
-    batchId,
-    molecules: meta.molecules,
-    target: targetConfig,
-  });
-
-  console.log(
-    `[reassign] Batch ${batchId} → ${socketId} ` +
-    `(deadline +${adaptiveTimeout(socketId)}ms)`,
-  );
-}
-
-/** Drain requeued batches whenever an idle node becomes available */
-function drainRequeued(io) {
-  while (requeuedBatches.length > 0) {
-    const replacement = getFastestIdleNode();
-    if (!replacement) break;
-
-    const { batchId } = requeuedBatches.shift();
-
-    // batch may have been removed in the meantime
-    if (!pendingBatches.has(batchId)) continue;
-
-    reassignBatch(batchId, replacement, io);
-  }
 }
 
 // ── progress & run completion ────────────────────────────────────────────────
 
 function emitScreeningProgress(io) {
+  const progress = chunkManager.getProgress();
   io.emit('screening:progress', {
-    runId: currentRunId,
-    completedBatches: completedBatchCount,
-    totalBatches: totalBatchCount,
-    percentComplete: Math.round((completedBatchCount / totalBatchCount) * 100),
-    moleculesScored: completedBatchCount * MOLECULE_BATCH_SIZE,
-    totalMolecules: moleculeLibrary.length,
+    ...progress,
+    totalVerifiedComputeSeconds: Math.round(totalVerifiedComputeSeconds),
+    status: chunkManager.isRunComplete() ? 'complete' : 'running',
   });
 }
 
-/**
- * Check if the current screening run is complete.
- * If all batches have been returned, loop back for a continuous demo.
- */
 function checkRunComplete(io) {
-  if (completedBatchCount >= totalBatchCount && pendingBatches.size === 0) {
-    console.log(
-      `[screening] Run ${currentRunId} COMPLETE — ` +
-      `${totalBatchCount}/${totalBatchCount} batches, ` +
-      `${moleculeLibrary.length} molecules scored`
-    );
+  if (chunkManager.isRunComplete()) {
+    console.log(`[screening] Run ${chunkManager.runId} COMPLETE`);
 
     io.emit('screening:status', {
-      runId: currentRunId,
-      totalBatches: totalBatchCount,
-      completedBatches: completedBatchCount,
-      totalMolecules: moleculeLibrary.length,
+      ...chunkManager.getProgress(),
       status: 'complete',
     });
 
-    // Loop: restart with the same library for continuous demo
+    // Loop: restart for continuous demo
     console.log('[screening] Looping — starting new screening run');
     startScreeningRun(io);
     tryDispatchNext(io);
   }
 }
 
-// ── molecule leaderboard (top 100) ───────────────────────────────────────────
+// ── molecule leaderboard (consensus-verified only) ───────────────────────────
 
-/**
- * Merge newly scored molecules into the top-100 leaderboard.
- * Also persist to Supabase if available.
- */
-async function updateMoleculeLeaderboard(scoredMolecules, userId) {
-  // Merge into in-memory list
+async function updateMoleculeLeaderboard(consensusScores, agreedNodeIds) {
   let added = 0;
-  for (const mol of scoredMolecules) {
-    if (mol == null || typeof mol.composite_score !== 'number') continue;
+  for (const mol of consensusScores) {
+    if (mol == null || typeof mol.similarity !== 'number') continue;
 
-    // Check if this molecule is already in the leaderboard (by smiles)
     const existingIdx = topMolecules.findIndex(m => m.smiles === mol.smiles);
     if (existingIdx >= 0) {
-      // Update if the new score is better
-      if (mol.composite_score > topMolecules[existingIdx].composite_score) {
-        topMolecules[existingIdx] = mol;
+      if (mol.similarity > topMolecules[existingIdx].similarity) {
+        topMolecules[existingIdx] = {
+          ...mol,
+          agreementCount: mol.agreementCount,
+          modelVersion: getModelVersion(),
+        };
       }
     } else {
-      topMolecules.push(mol);
+      topMolecules.push({
+        ...mol,
+        agreementCount: mol.agreementCount,
+        modelVersion: getModelVersion(),
+      });
       added++;
     }
   }
 
-  // Sort descending by composite_score and truncate to top 100
-  topMolecules.sort((a, b) => b.composite_score - a.composite_score);
+  topMolecules.sort((a, b) => b.similarity - a.similarity);
   topMolecules = topMolecules.slice(0, TOP_MOLECULES_LIMIT);
 
-  console.log(`[leaderboard] In-memory: +${added} new, ${topMolecules.length} total. Top score: ${topMolecules[0]?.composite_score?.toFixed(4) || 'N/A'}`);
+  if (added > 0) {
+    console.log(
+      `[leaderboard] +${added} new molecules. Top: ${topMolecules[0]?.similarity?.toFixed(4) || 'N/A'} (${topMolecules[0]?.smiles?.slice(0, 30) || 'N/A'})`
+    );
+  }
 
   // Persist to Supabase
-  if (supabase) {
+  if (supabase && consensusScores.length > 0) {
     try {
-      // Upsert scored molecules
-      const rows = scoredMolecules
-        .filter(m => m != null && typeof m.composite_score === 'number')
+      const rows = consensusScores
+        .filter(m => m != null && typeof m.similarity === 'number')
         .map(m => ({
           smiles: m.smiles,
-          molecule_name: m.name || null,
-          is_known_reference: m.is_known_reference || false,
-          mw: m.mw,
-          logp: m.logp,
-          hbd: m.hbd,
-          hba: m.hba,
-          rotatable_bonds: m.rotatable_bonds,
-          druglikeness_score: m.druglikeness_score,
-          complementarity_score: m.complementarity_score,
-          composite_score: m.composite_score,
-          scored_by_user_id: userId || null,
+          consensus_score: m.similarity,
+          predicted_probability: m.similarity,
+          agreement_count: m.agreementCount,
+          model_version: getModelVersion(),
+          composite_score: m.similarity, // backward compat
         }));
 
       if (rows.length > 0) {
-        const { data, error } = await supabase
-          .from('molecule_scores')
-          .upsert(rows, { onConflict: 'smiles' });
-
-        if (error) {
-          console.error('[leaderboard] Supabase upsert error:', error.message, error.details, error.hint);
-        } else {
-          console.log(`[leaderboard] Persisted ${rows.length} molecules to Supabase`);
+        const BATCH_SIZE = 50;
+        for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+          const batch = rows.slice(i, i + BATCH_SIZE);
+          const { error } = await supabase
+            .from('molecule_scores')
+            .upsert(batch, { onConflict: 'smiles' });
+          if (error) {
+            console.error('[leaderboard] Supabase upsert error:', error.message);
+          }
         }
       }
     } catch (err) {
-      console.error('[leaderboard] Supabase persist error:', err.message || err);
+      console.error('[leaderboard] Supabase persist error:', err.message);
     }
   }
 }
 
-// ── spot-check verification ──────────────────────────────────────────────────
+// ── consensus-gated credit awarding ──────────────────────────────────────────
 
-/**
- * Re-score 1 random molecule from a batch result server-side and compare.
- * Logs a warning if the scores differ beyond SPOT_CHECK_TOLERANCE.
- */
-async function spotCheckBatchResult(results, batchMolecules) {
-  if (!results || results.length === 0) return;
+async function awardConsensusCredits(chunkId, agreedNodeIds, disagreedNodeIds, chunkSize, totalComputeMs) {
+  for (const userId of agreedNodeIds) {
+    if (!userId || userId === 'anonymous') continue;
 
-  // Pick a random result to verify
-  const idx = Math.floor(Math.random() * results.length);
-  const clientResult = results[idx];
-  if (!clientResult || !clientResult.smiles) return;
+    const repMultiplier = await getReputationMultiplier(supabase, userId);
+    const computeSeconds = (totalComputeMs / 1000) / agreedNodeIds.length;
+    const credits = Math.max(1, Math.round(
+      CREDIT_BASE_RATE * chunkSize * repMultiplier
+    ));
 
-  try {
-    const serverResult = await scoreMolecule(clientResult.smiles, targetConfig);
+    try {
+      const updatedTotals = await incrementUserCredits(userId, credits);
 
-    if (!serverResult) {
-      console.warn(
-        `[spot-check] Server could not parse SMILES that client scored: "${clientResult.smiles}"`
-      );
-      return;
-    }
+      // Find the node's socket and update in-memory
+      for (const [socketId, node] of nodes) {
+        if (node.userId === userId) {
+          node.credits = updatedTotals?.credits || (node.credits + credits);
+          node.tasksCompleted++;
+          break;
+        }
+      }
 
-    const delta = Math.abs(clientResult.composite_score - serverResult.composite_score);
-    if (delta > SPOT_CHECK_TOLERANCE) {
-      console.warn(
-        `[spot-check] MISMATCH for "${clientResult.smiles}": ` +
-        `client=${clientResult.composite_score}, server=${serverResult.composite_score}, ` +
-        `delta=${delta.toFixed(4)}`
-      );
-    } else {
+      // Record credit event audit trail
+      if (supabase) {
+        await supabase.from('credit_events').insert({
+          user_id: userId,
+          chunk_id: chunkId,
+          credits_awarded: credits,
+          model_version: getModelVersion(),
+          agreement_details: { agreedNodeIds, disagreedNodeIds },
+          compute_seconds: computeSeconds,
+          reputation_multiplier: repMultiplier,
+        }).catch(() => {}); // non-critical
+      }
+
       console.log(
-        `[spot-check] OK "${clientResult.smiles.slice(0, 30)}…" ` +
-        `(Δ=${delta.toFixed(4)}) ✓`
+        `[credits] Awarded ${credits}cr to ${userId} for ${chunkId} ` +
+        `(rep: ${repMultiplier.toFixed(2)}, compute: ${computeSeconds.toFixed(1)}s)`
       );
+    } catch (err) {
+      console.error(`[credits] Failed to award credits to ${userId}:`, err.message);
     }
-  } catch (err) {
-    console.error('[spot-check] Error during server-side re-scoring:', err.message || err);
   }
+
+  // Update reputation for all participating nodes
+  for (const userId of agreedNodeIds) {
+    if (userId && userId !== 'anonymous') {
+      updateReputation(supabase, userId, true).catch(() => {});
+    }
+  }
+  for (const userId of disagreedNodeIds) {
+    if (userId && userId !== 'anonymous') {
+      updateReputation(supabase, userId, false).catch(() => {});
+    }
+  }
+
+  // Track total verified compute
+  totalVerifiedComputeSeconds += (totalComputeMs / 1000);
 }
 
 // ── pipeline helpers ──────────────────────────────────────────────────────────
@@ -738,22 +540,15 @@ function resetStallTimer(sessionId, stageIndex, io) {
   session.stallTimer = setTimeout(() => {
     console.warn(`[pipeline] Session ${sessionId} stalled at stage ${stageIndex}`);
     abortPipelineSession(sessionId, io, 'A pipeline stage stalled — aborting.');
-  }, 120000); // 120 seconds — generous for WebLLM first-token latency
+  }, 120000);
 }
 
 // ── socket setup ─────────────────────────────────────────────────────────────
 
 function setupSocketHandler(io) {
-  // ── Load screening data at startup ──
+  // ── Load screening data at startup (no server-side scoring!) ──
   loadScreeningData();
-
-  // ── Pre-score all molecules server-side (async, non-blocking) ──
-  // This populates the Research Panel immediately without waiting for clients
-  preScoreOnServer().then(() => {
-    console.log('[screening] Pre-scoring complete — Research Panel ready');
-  }).catch(err => {
-    console.error('[screening] Pre-scoring failed:', err.message);
-  });
+  loadModelConfig();
 
   io.on('connection', (socket) => {
     // ── 1. Synchronous Initial Setup ──
@@ -776,9 +571,6 @@ function setupSocketHandler(io) {
       const node = nodes.get(socket.id);
       if (node) {
         node.supportsInference = supportsInference;
-        // Don't set status to idle here — the async auth block does that
-        // after authentication completes, preventing the race condition
-        // where batches are dispatched before userId is set.
         console.log(`[register] ${socket.id} registered (inference: ${supportsInference})`);
       }
     });
@@ -798,6 +590,11 @@ function setupSocketHandler(io) {
       }
     });
 
+    // ── Model info request — client asks what model to use ──
+    socket.on('model:info', () => {
+      socket.emit('model:info', getModelInfo());
+    });
+
     // ── 2. Asynchronous Authentication ──
     (async () => {
       let user = null;
@@ -815,16 +612,14 @@ function setupSocketHandler(io) {
           const payload = ticket.getPayload();
 
           if (payload) {
-            const userId = payload.sub; // Google ID
+            const userId = payload.sub;
             const googleEmail = payload.email;
             const googleName = payload.name;
 
             const usersList = await loadUsers();
 
-            // 1. Look up user by Google ID
             let dbUser = usersList.find(u => u.id === userId);
 
-            // 2. Resolve User ID Migration: If not found by Google ID, match by email/username prefix
             if (!dbUser) {
               dbUser = usersList.find(u => {
                 if (!u.username) return false;
@@ -836,20 +631,18 @@ function setupSocketHandler(io) {
               });
 
               if (dbUser) {
-                console.log(`[migration] Linked existing account '${dbUser.username}' (credits: ${dbUser.credits}) to Google ID ${userId}`);
-                dbUser.id = userId; // Update ID to Google ID
-                // Sync username with Google profile
+                console.log(`[migration] Linked existing account '${dbUser.username}' to Google ID ${userId}`);
+                dbUser.id = userId;
                 dbUser.username = googleName || googleEmail || dbUser.username;
                 await saveUsers(usersList);
               }
             }
 
-            // 3. Fallback: Create new user if no match found
             if (!dbUser) {
               dbUser = {
                 id: userId,
                 username: googleName || googleEmail || 'Google User',
-                credits: 5000 // 5000 raw credits = 50 crystals
+                credits: 5000
               };
               usersList.push(dbUser);
               await saveUsers(usersList);
@@ -870,15 +663,14 @@ function setupSocketHandler(io) {
       }
 
       const node = nodes.get(socket.id);
-      if (!node) return; // Socket disconnected before auth finished
+      if (!node) return;
 
       if (user) {
         node.userId = user.id;
         node.username = user.username;
         node.credits = user.credits;
-        node.status = 'idle'; // Upgraded from unauthenticated
+        node.status = 'idle';
 
-        drainRequeued(io);
         tryDispatchNext(io);
 
         const gameData = await loadUserGameData(user.id);
@@ -910,37 +702,25 @@ function setupSocketHandler(io) {
       io.emit('node_count', nodes.size);
     })();
 
-    // ── handle molecule batch results coming back from a browser ──
+    // ── handle molecule batch results — CONSENSUS GATED ──────────────────
     socket.on('molecule_batch_result', async (data) => {
       try {
-        // ── untrusted client input validation ──
         if (!data || typeof data.batchId !== 'string' || !Array.isArray(data.results)) {
           console.warn(`[result] Malformed molecule_batch_result from ${socket.id}`);
           markIdle(socket.id, io);
           return;
         }
 
-        const { batchId, results, computeMs } = data;
+        const { batchId, results, computeMs, modelVersion } = data;
+        const node = nodes.get(socket.id);
 
-        const meta = pendingBatches.get(batchId);
-        if (!meta) {
+        // ── timing sanity check ──
+        const timingCheck = isTimingPlausible(computeMs || 0, results.length);
+        if (!timingCheck.plausible) {
+          console.warn(`[result] REJECTED from ${socket.id}: ${timingCheck.reason}`);
           markIdle(socket.id, io);
           return;
         }
-
-        // ignore results from a node that was already reassigned away
-        if (meta.socketId !== socket.id) {
-          console.log(
-            `[result] Ignoring late result from ${socket.id} for ${batchId} (reassigned to ${meta.socketId})`,
-          );
-          markIdle(socket.id, io);
-          return;
-        }
-
-        // ── spot-check verification (async, non-blocking) ──
-        spotCheckBatchResult(results, meta.molecules).catch(err => {
-          console.error('[spot-check] Uncaught error:', err);
-        });
 
         // ── update performance map ──
         const elapsed = computeMs || 0;
@@ -952,74 +732,74 @@ function setupSocketHandler(io) {
           nodePerformance.set(socket.id, { avgMsPerBatch: elapsed, samples: 1 });
         }
 
-        // ── award credits: 1 credit per molecule scored ──
-        const credits = results.length;
-        const node = nodes.get(socket.id);
-
-        let totalCredits = credits;
-        if (node) {
-          node.credits = (node.credits || 0) + credits;
-          node.tasksCompleted++;
-          totalCredits = node.credits;
-        }
-
-        // Persist to users table if authenticated
-        if (meta.userId) {
-          try {
-            const updatedTotals = await incrementUserCredits(meta.userId, credits);
-            if (updatedTotals) {
-              totalCredits = updatedTotals.credits;
-              if (node) {
-                node.credits = totalCredits;
-              }
-              console.log(`[credits] Persisted ${credits} credits to user ${meta.username}. Total: ${updatedTotals.credits}, Lifetime: ${updatedTotals.total_contributed}`);
-            }
-          } catch (err) {
-            console.error(`[credits] Failed to persist credits for user ${meta.userId}:`, err);
-          }
-        }
-
-        // ── update molecule leaderboard ──
-        // Tag results with molecule metadata from the original batch
-        const enrichedResults = results.map((r, i) => {
-          const origMol = meta.molecules[i];
-          if (!r) return r;
-          return {
-            ...r,
-            name: origMol ? origMol.name : undefined,
-            molecule_id: origMol ? origMol.id : undefined,
-            is_known_reference: origMol ? (origMol.is_known_reference === true) : false,
-          };
-        });
-        updateMoleculeLeaderboard(enrichedResults, meta.userId).catch(err => {
-          console.error('[leaderboard] Update error:', err);
-        });
-
-        console.log(
-          `[result] ${socket.id} finished batch ${batchId} ` +
-          `(${results.length} mols, ${elapsed}ms, +${credits}cr) ✓`,
+        // ── record result in chunk manager (does NOT award credits yet) ──
+        const recordStatus = chunkManager.recordResult(
+          batchId,
+          socket.id,
+          node?.userId,
+          results,
+          elapsed,
+          modelVersion || getModelVersion()
         );
 
-        // Emit updated user info/credits to the node
-        if (node) {
-          io.to(socket.id).emit('user_info', {
-            username: node.username,
-            credits: node.credits,
-            isAuthenticated: !!node.userId,
-          });
-        }
-
-        // ── clean up this batch ──
-        pendingBatches.delete(batchId);
-        completedBatchCount++;
-
-        // emit progress
-        emitScreeningProgress(io);
-
-        // node is now idle — also triggers tryDispatchNext
+        // Node is now idle
         markIdle(socket.id, io);
 
-        // check if the whole run is done
+        if (recordStatus === 'ignored') return;
+
+        if (recordStatus === 'ready_for_consensus') {
+          // ── Run consensus check ──
+          const chunk = chunkManager.chunks.get(batchId);
+          if (!chunk) return;
+
+          const consensus = checkConsensus(chunk.results);
+
+          if (consensus.passed) {
+            // ✓ Consensus reached!
+            chunkManager.markConsensusReached(batchId);
+
+            console.log(
+              `[consensus] ✓ ${batchId} PASSED: ${consensus.details}`
+            );
+
+            // Update leaderboard with consensus-verified scores
+            updateMoleculeLeaderboard(consensus.acceptedScores, consensus.agreedNodeIds).catch(err => {
+              console.error('[leaderboard] Update error:', err);
+            });
+
+            // Award credits to agreeing nodes (consensus-gated!)
+            const totalComputeMs = chunk.results.reduce((sum, r) => sum + r.wallClockMs, 0);
+            awardConsensusCredits(
+              batchId,
+              consensus.agreedNodeIds,
+              consensus.disagreedNodeIds,
+              chunk.molecules.length,
+              totalComputeMs
+            ).catch(err => {
+              console.error('[credits] Award error:', err);
+            });
+
+            // Emit updated user info to all participating nodes
+            for (const [socketId, n] of nodes) {
+              if (consensus.agreedNodeIds.includes(n.userId)) {
+                io.to(socketId).emit('user_info', {
+                  username: n.username,
+                  credits: n.credits,
+                  isAuthenticated: !!n.userId,
+                });
+              }
+            }
+
+          } else if (chunk.results.length >= CONSENSUS_K) {
+            // All k results are in but consensus failed
+            console.warn(`[consensus] ✗ ${batchId} FAILED: ${consensus.details}`);
+            chunkManager.requeueChunk(batchId);
+          }
+          // else: partial results, wait for more
+        }
+
+        // emit progress (only moves when consensus completes)
+        emitScreeningProgress(io);
         checkRunComplete(io);
 
       } catch (err) {
@@ -1028,7 +808,7 @@ function setupSocketHandler(io) {
       }
     });
 
-    // ── The Forge — game event handlers ────────────────────────────────────────
+    // ── The Forge — game event handlers (unchanged) ──────────────────────
 
     // Shop: unlock a card
     socket.on('shop:unlock_card', async ({ cardId }) => {
@@ -1039,14 +819,12 @@ function setupSocketHandler(io) {
           return;
         }
 
-        // validate card exists
         const card = CARD_MAP[cardId];
         if (!card) {
           socket.emit('shop:unlock_result', { success: false, reason: 'invalid_card' });
           return;
         }
 
-        // check not already owned
         if (supabase) {
           const { data: existing } = await supabase
             .from('user_cards')
@@ -1060,7 +838,6 @@ function setupSocketHandler(io) {
           }
         }
 
-        // check balance (server-side, never trust client)
         const creditCost = card.cost * CREDITS_PER_CRYSTAL;
         const usersList = await loadUsers();
         const dbUser = usersList.find(u => u.id === node.userId);
@@ -1069,9 +846,7 @@ function setupSocketHandler(io) {
           return;
         }
 
-        // deduct credits (never use negative amounts with incrementUserCredits)
         if (supabase) {
-          // Atomic deduct: only succeeds if credits >= cost
           const { data: deducted, error: deductErr } = await supabase
             .from('users')
             .update({ credits: dbUser.credits - creditCost })
@@ -1086,7 +861,6 @@ function setupSocketHandler(io) {
           }
           node.credits = deducted.credits;
         } else {
-          // Local JSON fallback
           dbUser.credits = dbUser.credits - creditCost;
           const allUsers = await loadUsers();
           const localUser = allUsers.find(u => u.id === node.userId);
@@ -1097,13 +871,11 @@ function setupSocketHandler(io) {
           node.credits = dbUser.credits;
         }
 
-        // insert card ownership
         if (supabase) {
           const { error: insertError } = await supabase
             .from('user_cards')
             .insert({ user_id: node.userId, card_id: cardId });
           if (insertError) {
-            // rollback: re-add the cost (positive amount)
             await incrementUserCredits(node.userId, creditCost);
             node.credits = node.credits + creditCost;
             console.error('[shop] Failed to insert card:', insertError.message);
@@ -1114,7 +886,6 @@ function setupSocketHandler(io) {
 
         console.log(`[shop] ${node.username} unlocked ${card.name} for ${card.cost} crystals`);
 
-        // send result + updated user_info
         const gameData = await loadUserGameData(node.userId);
         const trophies = await loadUserTrophies(node.userId);
         socket.emit('shop:unlock_result', { success: true, cardId, newBalance: node.credits });
@@ -1141,13 +912,11 @@ function setupSocketHandler(io) {
           return;
         }
 
-        // validate exactly 4 card IDs
         if (!Array.isArray(cardIds) || cardIds.length !== DECK_SIZE) {
           socket.emit('deck:save_result', { success: false, reason: 'invalid_deck_size' });
           return;
         }
 
-        // validate all cards exist in catalog
         for (const cid of cardIds) {
           if (!CARD_MAP[cid]) {
             socket.emit('deck:save_result', { success: false, reason: `invalid_card: ${cid}` });
@@ -1155,7 +924,6 @@ function setupSocketHandler(io) {
           }
         }
 
-        // validate all cards are owned
         if (supabase) {
           const { data: owned } = await supabase
             .from('user_cards')
@@ -1169,7 +937,6 @@ function setupSocketHandler(io) {
             }
           }
 
-          // upsert deck
           const { error } = await supabase
             .from('user_decks')
             .upsert({ user_id: node.userId, card_ids: cardIds, updated_at: new Date().toISOString() },
@@ -1184,7 +951,6 @@ function setupSocketHandler(io) {
         console.log(`[deck] ${node.username} saved deck: [${cardIds.join(', ')}]`);
         socket.emit('deck:save_result', { success: true });
 
-        // send updated user_info
         const gameData = await loadUserGameData(node.userId);
         const trophies = await loadUserTrophies(node.userId);
         socket.emit('user_info', {
@@ -1203,7 +969,7 @@ function setupSocketHandler(io) {
       }
     });
 
-    // Battle: report result — server re-simulates to validate
+    // Battle: report result
     socket.on('battle:report_result', async ({ won, trophies: clientTrophies }) => {
       try {
         const node = nodes.get(socket.id);
@@ -1212,14 +978,12 @@ function setupSocketHandler(io) {
           return;
         }
 
-        // load player's saved deck
         const gameData = await loadUserGameData(node.userId);
         if (!gameData.savedDeck || gameData.savedDeck.length !== DECK_SIZE) {
           socket.emit('battle:result_confirmed', { success: false, reason: 'no_valid_deck' });
           return;
         }
 
-        // resolve player deck to full card objects and apply upgrades
         const playerDeck = gameData.savedDeck.map(id => {
           const baseCard = CARD_MAP[id];
           if (!baseCard) return null;
@@ -1236,21 +1000,17 @@ function setupSocketHandler(io) {
           return;
         }
 
-        // get current trophies to determine bot tier
         const currentTrophies = await loadUserTrophies(node.userId);
         const botTier = getBotTier(currentTrophies);
         const botDeck = botTier.cardIds.map(id => CARD_MAP[id]);
 
-        // re-simulate battle server-side
         const result = simulateBattle(playerDeck, botDeck);
         const serverSaysWon = result.winner === 'player';
 
-        // validate client claim matches server simulation
         if (won !== serverSaysWon) {
           console.warn(`[battle] MISMATCH: ${node.username} claimed ${won ? 'win' : 'loss'} but server says ${serverSaysWon ? 'win' : 'loss'}`);
         }
 
-        // update trophies
         const delta = serverSaysWon ? TROPHY_WIN : TROPHY_LOSS;
         const newTrophies = Math.max(0, currentTrophies + delta);
 
@@ -1268,7 +1028,6 @@ function setupSocketHandler(io) {
 
         console.log(`[battle] ${node.username} ${won ? 'WON' : 'LOST'}: ${currentTrophies} → ${newTrophies} (${delta > 0 ? '+' : ''}${delta})`);
 
-        // check for tier escalation toast
         let tierEscalation = null;
         const oldTier = getBotTier(currentTrophies);
         const newTier = getBotTier(newTrophies);
@@ -1283,7 +1042,6 @@ function setupSocketHandler(io) {
           tierEscalation,
         });
 
-        // send updated user_info
         socket.emit('user_info', {
           username: node.username,
           credits: node.credits,
@@ -1333,14 +1091,12 @@ function setupSocketHandler(io) {
         }
 
         if (supabase) {
-          // Check ownership
           const { data: existing } = await supabase.from('user_cards').select('card_id').eq('user_id', node.userId).eq('card_id', cardId).single();
           if (!existing) {
             socket.emit('card:upgrade_result', { success: false, reason: 'card_not_owned' });
             return;
           }
 
-          // Fetch current upgrades
           const { data: upgData } = await supabase.from('user_card_upgrades').select('attack_upgrades, defense_upgrades').eq('user_id', node.userId).eq('card_id', cardId).single();
           const currentAttack = upgData ? (upgData.attack_upgrades || 0) : 0;
           const currentDefense = upgData ? (upgData.defense_upgrades || 0) : 0;
@@ -1350,7 +1106,6 @@ function setupSocketHandler(io) {
             return;
           }
 
-          // Deduct credits
           const { data: deducted, error: deductErr } = await supabase.from('users').update({ credits: dbUser.credits - 1000 }).eq('id', node.userId).gte('credits', 1000).select('credits').single();
           if (deductErr || !deducted) {
             socket.emit('card:upgrade_result', { success: false, reason: 'insufficient_crystals' });
@@ -1358,7 +1113,6 @@ function setupSocketHandler(io) {
           }
           node.credits = deducted.credits;
 
-          // Upsert upgrade
           const newAttack = statType === 'attack' ? currentAttack + 1 : currentAttack;
           const newDefense = statType === 'defense' ? currentDefense + 1 : currentDefense;
 
@@ -1370,7 +1124,6 @@ function setupSocketHandler(io) {
             updated_at: new Date().toISOString()
           });
 
-          // Write audit log
           await supabase.from('upgrade_audit_logs').insert({
             user_id: node.userId,
             card_id: cardId,
@@ -1402,14 +1155,12 @@ function setupSocketHandler(io) {
         socket.emit('card:upgrade_result', { success: false, reason: 'server_error' });
       }
     });
+
     // ── INFERENCE PIPELINE EVENTS ────────────────────────────────────────────
 
     socket.on('start_generation', async ({ sessionId, prompt }) => {
-      // First try: find idle nodes that support inference
       let idleIds = getIdleNodeIds(true);
 
-      // If no idle inference nodes, try to find ANY node that supports inference
-      // (it may be busy with molecule screening, which can be safely interrupted)
       if (idleIds.length === 0) {
         const allInferenceNodes = [];
         for (const [id, node] of nodes) {
@@ -1418,8 +1169,6 @@ function setupSocketHandler(io) {
           }
         }
         if (allInferenceNodes.length > 0) {
-          // Temporarily mark one busy node as idle so inference can proceed
-          // The screening batch will time out and be reassigned, which is fine
           const candidateId = allInferenceNodes[0];
           const candidateNode = nodes.get(candidateId);
           if (candidateNode) {
@@ -1435,7 +1184,6 @@ function setupSocketHandler(io) {
         return;
       }
 
-      // Pick ONE fast node for Request-Parallel inference, prefer warm nodes
       let warmIdleIds = idleIds.filter(id => {
         const n = nodes.get(id);
         return n && n.isWarm;
@@ -1488,7 +1236,7 @@ function setupSocketHandler(io) {
 
       const stages = [{
         stageIndex: 0,
-        layerRange: [0, LLM_LAYERS - 1], // All layers
+        layerRange: [0, LLM_LAYERS - 1],
         role: 'all',
         socketId: assignedNodeId
       }];
@@ -1502,7 +1250,6 @@ function setupSocketHandler(io) {
         expectedStageIndex: 0
       });
 
-      // Global broadcast for UI visualization
       io.emit('pipeline_plan', { sessionId, stages });
 
       const targetSocket = io.sockets.sockets.get(assignedNodeId);
@@ -1515,7 +1262,6 @@ function setupSocketHandler(io) {
         });
       }
 
-      // Wait for node to load its model shards
       let allReady = true;
       try {
         await new Promise((resolve, reject) => {
@@ -1523,8 +1269,8 @@ function setupSocketHandler(io) {
           if (!targetSocket) return reject(new Error('Node missing'));
 
           const envTimeout = process.env.SHARD_LOAD_TIMEOUT_MS ? parseInt(process.env.SHARD_LOAD_TIMEOUT_MS, 10) : null;
-          const outerTimeoutMs = envTimeout || 1800000; // 30 minutes absolute max or env override
-          let progressTimerMs = 90000; // 90 seconds progress timeout
+          const outerTimeoutMs = envTimeout || 1800000;
+          let progressTimerMs = 90000;
           let progressTimer = null;
           let outerTimer = null;
           
@@ -1566,7 +1312,7 @@ function setupSocketHandler(io) {
           };
 
           targetSocket.on('stage_ready', onStageReady);
-          resetProgressTimer(); // start initial 90s timer
+          resetProgressTimer();
         });
       } catch (err) {
         console.error(`[pipeline] Stage ready wait failed:`, err.message);
@@ -1599,21 +1345,17 @@ function setupSocketHandler(io) {
         session.stallTimer = null;
       }
 
-      // If generation is complete (WebLLM signals end)
       if (isComplete) {
         io.emit('pipeline_end', { sessionId });
         finishPipelineSession(sessionId, io);
         return;
       }
 
-      // Resolve token text: use tokenText directly if provided (WebLLM),
-      // otherwise decode tokenId via server tokenizer (legacy)
       let resolvedText = tokenText || '';
       if (!resolvedText && tokenId !== undefined) {
         try {
           const tokenizer = getTokenizer();
           resolvedText = tokenizer.decode([tokenId]);
-          // Check for EOS in legacy mode
           if (tokenId === tokenizer.eosId) {
             io.emit('pipeline_end', { sessionId });
             finishPipelineSession(sessionId, io);
@@ -1631,7 +1373,6 @@ function setupSocketHandler(io) {
         clientSocket.emit('final_token', { sessionId, tokenText: resolvedText });
       }
 
-      // Reset stall timer for the next streamed token
       resetStallTimer(sessionId, 0, io);
     });
 
@@ -1641,7 +1382,6 @@ function setupSocketHandler(io) {
     });
 
     socket.on('disconnect', () => {
-      // remove from pool FIRST so it can't be picked as a reassignment target
       nodes.delete(socket.id);
       nodePerformance.delete(socket.id);
 
@@ -1652,51 +1392,49 @@ function setupSocketHandler(io) {
         }
       }
 
-      // immediately reassign any in-flight batches from this node
-      for (const [batchId, meta] of pendingBatches) {
-        if (meta.socketId === socket.id) {
-          meta.retries++;
-          if (meta.retries > MAX_CHUNK_RETRIES) {
-            console.error(`[FAILED] Batch ${batchId}: node ${socket.id} disconnected, exceeded retries`);
-            pendingBatches.delete(batchId);
-            completedBatchCount++;
-            emitScreeningProgress(io);
-            checkRunComplete(io);
-            continue;
-          }
-          const replacement = getFastestIdleNode();
-          if (replacement) {
-            reassignBatch(batchId, replacement, io);
-          } else {
-            meta.deadline = Infinity;
-            requeuedBatches.push({ batchId });
-            console.log(`[requeue] Batch ${batchId} queued (node ${socket.id} disconnected)`);
-          }
-        }
-      }
+      // Remove from any assigned chunks
+      chunkManager.handleNodeDisconnect(socket.id);
 
       console.log(`[node-] ${socket.id} disconnected (${nodes.size} total)`);
       io.emit('node_count', nodes.size);
     });
   });
 
-  // deadline scanner — every 2 s, check for overdue batches
-  setInterval(() => scanDeadlines(io), DEADLINE_SCAN_INTERVAL_MS);
+  // deadline scanner — every 5s check for stalled chunks
+  setInterval(() => {
+    // Simple check: if a chunk has been assigned for too long, requeue
+    const now = Date.now();
+    for (const [chunkId, chunk] of chunkManager.chunks) {
+      if (chunk.status === 'assigned' && chunk.assignedNodes.size > 0) {
+        // Check if any assigned node is still connected
+        let hasLiveNode = false;
+        for (const socketId of chunk.assignedNodes.keys()) {
+          if (nodes.has(socketId)) {
+            hasLiveNode = true;
+            break;
+          }
+        }
+        if (!hasLiveNode) {
+          console.log(`[timeout] All nodes for ${chunkId} disconnected, requeuing`);
+          chunkManager.requeueChunk(chunkId);
+        }
+      }
+    }
+    // Try to dispatch more work
+    tryDispatchNext(io);
+  }, DEADLINE_SCAN_INTERVAL_MS);
 
-  // Start the first screening run so work begins as soon as a node connects
+  // Start the first screening run
   startScreeningRun(io);
 }
 
 // ── leaderboard logic ────────────────────────────────────────────────────────
 async function getLeaderboard() {
   const usersList = await loadUsers();
-  // Filter out users with 0 total_contributed to keep leaderboard clean
   const activeUsers = usersList.filter(u => (u.total_contributed || 0) > 0);
 
-  // Sort descending by total_contributed
   activeUsers.sort((a, b) => (b.total_contributed || 0) - (a.total_contributed || 0));
 
-  // Return top 10
   return activeUsers.slice(0, 10).map((u, index) => ({
     rank: index + 1,
     username: u.username,
@@ -1706,13 +1444,10 @@ async function getLeaderboard() {
 
 async function getForgemasterLeaderboard() {
   const usersList = await loadUsers();
-  // Filter out users with 0 trophies
   const activePlayers = usersList.filter(u => (u.trophies || 0) > 0);
 
-  // Sort descending by trophies
   activePlayers.sort((a, b) => (b.trophies || 0) - (a.trophies || 0));
 
-  // Return top 10
   return activePlayers.slice(0, 10).map((u, index) => ({
     rank: index + 1,
     username: u.username,
@@ -1720,9 +1455,23 @@ async function getForgemasterLeaderboard() {
   }));
 }
 
-/** Get the current top-100 molecule leaderboard (in-memory) */
+/** Get the current top-100 molecule leaderboard (consensus-verified only) */
 function getMoleculeLeaderboard() {
   return topMolecules.slice(0, TOP_MOLECULES_LIMIT);
 }
 
-module.exports = { setupSocketHandler, getLeaderboard, getForgemasterLeaderboard, getMoleculeLeaderboard };
+/** Get screening progress stats */
+function getScreeningProgress() {
+  return {
+    ...chunkManager.getProgress(),
+    totalVerifiedComputeSeconds: Math.round(totalVerifiedComputeSeconds),
+  };
+}
+
+module.exports = {
+  setupSocketHandler,
+  getLeaderboard,
+  getForgemasterLeaderboard,
+  getMoleculeLeaderboard,
+  getScreeningProgress,
+};

@@ -10,8 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.0.0",
     "@mlc-ai/web-llm": "^0.2.84",
-    "@rdkit/rdkit": "^2025.3.4-1.0.0",
     "@react-oauth/google": "^0.13.5",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

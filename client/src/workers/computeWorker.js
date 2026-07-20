@@ -1,11 +1,18 @@
-// Web Worker for distributed matrix multiplication & AI Inference via WebLLM
+// Web Worker for distributed molecular screening & AI Inference via WebLLM
 // 
-// Architecture: Each browser tab loads the full TinyLlama model via WebLLM.
-// The server routes user prompts to idle (preferably warm) nodes.
-// Each node performs full text generation locally and streams tokens back.
+// Molecule Screening:
+//   Uses ChemBERTa-77M-MTR (via Transformers.js) to embed SMILES strings
+//   and score them by cosine similarity to reference antibiotics.
+//   Each node does real ML inference — the work is genuinely distributed
+//   across multiple browser tabs.
+//
+// AI Inference:
+//   Each browser tab loads the full TinyLlama model via WebLLM.
+//   The server routes user prompts to idle (preferably warm) nodes.
+//   Each node performs full text generation locally and streams tokens back.
 
 import { CreateMLCEngine } from '@mlc-ai/web-llm';
-import { scoreMolecule } from './molecularScorer.js';
+import { scoreMoleculeBatch, ensureModel } from './molecularScorer.js';
 
 // ── WebLLM Engine (singleton) ────────────────────────────────────────────────
 let engine = null;
@@ -43,26 +50,39 @@ async function ensureEngine(onProgress) {
 // ── Active generation sessions (to support cancellation) ─────────────────────
 const activeSessions = new Set();
 
+// ── ChemBERTa model preloading ───────────────────────────────────────────────
+let chemBertaLoading = false;
+
 // ── Message Handler ──────────────────────────────────────────────────────────
 self.onmessage = async function (e) {
   const data = e.data;
   const type = data.type;
-  // ── MOLECULE SCREENING ROUTE (ComputeQuest tasks) ──────────────────
+
+  // ── MOLECULE SCREENING — ChemBERTa + cosine similarity ─────────────
   if (type === 'molecule_batch') {
-    const { taskId, batchId, molecules, target } = data;
+    const { taskId, batchId, molecules, modelVersion, referenceAntibiotics, referenceEmbeddings } = data;
+
+    // Report ChemBERTa loading progress (first time only)
+    if (!chemBertaLoading) {
+      chemBertaLoading = true;
+      ensureModel((progress) => {
+        self.postMessage({
+          type: 'chemberta_progress',
+          percent: Math.round(progress.progress * 100),
+          label: progress.text || 'Loading ChemBERTa...',
+        });
+      }).catch(() => {});
+    }
 
     const startTime = Date.now();
-    const results = [];
 
-    // Process each molecule sequentially (RDKit WASM doesn't benefit from parallel async here)
-    for (const mol of molecules) {
-      if (mol && mol.smiles) {
-        const score = await scoreMolecule(mol.smiles, target);
-        results.push(score); // Even if it fails (null), we want to return it to maintain alignment
-      } else {
-        results.push(null);
-      }
-    }
+    // Score the batch — each molecule gets embedded by ChemBERTa
+    // and scored by cosine similarity to reference antibiotics
+    const results = await scoreMoleculeBatch(
+      molecules,
+      referenceAntibiotics || [],
+      referenceEmbeddings || null
+    );
 
     const computeMs = Date.now() - startTime;
 
@@ -72,6 +92,7 @@ self.onmessage = async function (e) {
       batchId,
       results,
       computeMs,
+      modelVersion: modelVersion || 'v1',
     });
     return;
   }
