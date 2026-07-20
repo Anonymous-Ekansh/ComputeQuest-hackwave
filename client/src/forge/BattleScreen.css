@@ -109,14 +109,14 @@
 
 .battle-start-btn {
   background: transparent;
-  color: var(--color-accent);
-  border-color: var(--color-accent);
+  color: #00f0ff;
+  border-color: #00f0ff;
 }
 
 .battle-start-btn:hover {
   transform: translateY(-2px);
-  background: rgba(57, 255, 20, 0.1);
-  box-shadow: 0 0 15px rgba(57, 255, 20, 0.4);
+  background: rgba(0, 240, 255, 0.1);
+  box-shadow: 0 0 15px rgba(0, 240, 255, 0.4);
 }
 
 .battle-edit-btn {
@@ -191,8 +191,8 @@
 .battle-go-btn {
   padding: 14px 40px;
   background: transparent;
-  color: var(--color-accent);
-  border: 1px solid var(--color-accent);
+  color: #00f0ff;
+  border: 1px solid #00f0ff;
   border-radius: 4px;
   font-family: var(--font-heading);
   font-size: 1rem;
@@ -205,8 +205,8 @@
 
 .battle-go-btn:hover {
   transform: translateY(-2px) scale(1.02);
-  background: rgba(57, 255, 20, 0.1);
-  box-shadow: 0 0 20px rgba(57, 255, 20, 0.4);
+  background: rgba(0, 240, 255, 0.1);
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -235,7 +235,7 @@
   font-weight: 700;
 }
 
-.player-hud .hud-label { color: var(--color-accent); font-family: var(--font-heading); letter-spacing: 1px; }
+.player-hud .hud-label { color: #00f0ff; font-family: var(--font-heading); letter-spacing: 1px; }
 .player-hud .hud-count { color: #fff; }
 .bot-hud .hud-label { color: #ef4444; font-family: var(--font-heading); letter-spacing: 1px; }
 .bot-hud .hud-count { color: #fff; }
@@ -409,9 +409,9 @@
 }
 
 .fighter.player {
-  background: rgba(57, 255, 20, 0.1);
-  border: 1px solid var(--color-accent);
-  box-shadow: 0 0 10px rgba(57, 255, 20, 0.4);
+  background: rgba(0, 240, 255, 0.1);
+  border: 1px solid #00f0ff;
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
 }
 
 .fighter.bot {
@@ -442,15 +442,15 @@
   position: absolute;
   inset: -6px;
   border-radius: 50%;
-  border: 1px solid var(--color-accent);
-  box-shadow: 0 0 14px rgba(57, 255, 20, 0.5), inset 0 0 8px rgba(57, 255, 20, 0.2);
+  border: 1px solid #00f0ff;
+  box-shadow: 0 0 14px rgba(0, 240, 255, 0.5), inset 0 0 8px rgba(0, 240, 255, 0.2);
   animation: selectPulse 1.5s ease-in-out infinite;
   pointer-events: none;
 }
 
 @keyframes selectPulse {
-  0%, 100% { border-color: var(--color-accent); box-shadow: 0 0 14px rgba(57, 255, 20, 0.5); }
-  50% { border-color: rgba(57, 255, 20, 0.4); box-shadow: 0 0 8px rgba(57, 255, 20, 0.3); }
+  0%, 100% { border-color: #00f0ff; box-shadow: 0 0 14px rgba(0, 240, 255, 0.5); }
+  50% { border-color: rgba(0, 240, 255, 0.4); box-shadow: 0 0 8px rgba(0, 240, 255, 0.3); }
 }
 
 /* Fighter glyph */
@@ -469,7 +469,7 @@
   right: -6px;
   width: 14px;
   height: 14px;
-  background: var(--color-accent);
+  background: #00f0ff;
   color: #000;
   font-family: var(--font-mono);
   font-size: 0.55rem;
@@ -618,10 +618,10 @@
 }
 
 .char-select-btn.active {
-  border-color: var(--color-accent);
-  background: rgba(57, 255, 20, 0.1);
+  border-color: #00f0ff;
+  background: rgba(0, 240, 255, 0.1);
   color: #fff;
-  box-shadow: 0 0 10px rgba(57, 255, 20, 0.2);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
 }
 
 .char-select-btn.dead {
@@ -645,7 +645,7 @@
 }
 
 .char-select-btn.active .csb-num {
-  background: var(--color-accent);
+  background: #00f0ff;
   color: #000;
 }
 
