@@ -79,7 +79,7 @@ client/.env
 .env.local
 
 # Temporary test scripts (never commit)
-test_*.js
+test*.js
 
 # parcel-cache
 .cache

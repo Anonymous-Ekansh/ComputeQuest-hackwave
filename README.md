@@ -1,273 +1,118 @@
-# ComputeQuest 
+# ComputeQuest
+**Turn your browser's idle time into real science and a completely private AI host — and get rewarded with an epic card game.**
 
-> Donate your browser's computing power. Earn crystals. Forge your deck. Dominate the bots.
+## What is this?
+Imagine if every time you left a tab open on your browser, you were helping scientists discover the next life-saving antibiotic, while simultaneously powering a smart, private AI assistant that lives directly on your computer. That's ComputeQuest.
 
-ComputeQuest is a distributed computing platform disguised as a deck-building card game. Users contribute idle CPU cycles from their browser to a shared compute pool — powering real ML-based drug screening and AI inference. In return, they earn in-game credits that can be converted into Crystals to buy cards, build a deck, and battle in The Forge.
+Searching for new drugs or running Large Language Models (like ChatGPT) usually requires massive, expensive supercomputers. ComputeQuest flips the script: it breaks those massive jobs into tiny pieces and hands them to anyone who opens our website. Your browser quietly does useful science work in the background, and uses its graphics card to run a real AI model locally, without you having to install a single thing.
 
-No downloads. No sign-up friction. Just open a tab and start contributing.
-
----
+And because doing science should be fun, we reward you! For every piece of work your browser successfully completes, you earn credits. You can spend those credits in our built-in card game to build a deck and battle bots.
 
 ## How it works
+Here is what happens behind the scenes while you play:
 
-```
-Your browser tab → Web Worker runs compute tasks silently in background
-      ↓
-WebSocket sends results and streamed text to coordinator server
-      ↓
-Server routes new tasks to idle nodes, aggregates results, awards credits
-      ↓
-Credits are converted to Crystals to buy cards and build your deck
-```
+**1. The Server hands out homework.**
+Our central server has a giant list of potential drug candidates. It chops this list into small chunks and sends a chunk to your browser.
 
-Each connected browser is a **compute node**. The server distributes heavy tasks (like virtual drug screening) across all online nodes in chunks, and routes full LLM inference prompts to idle, warm nodes (Request-Parallel architecture). The more you contribute, the more credits you earn — allowing you to buy rarer cards and defeat harder bot tiers.
+**2. Your browser does the math (Drug Screening).**
+Your browser converts a drug candidate into a list of numbers that describes its shape (using a small AI model called ChemBERTa). It then checks how similar that shape is to known antibiotics — kind of like comparing fingerprints.
 
----
+**3. Your browser becomes an AI host (Hackwave LLM).**
+While screening drugs, your browser also downloads a powerful AI called TinyLlama using WebLLM technology. When someone asks the ComputeQuest AI a question, the server routes that question to *your* browser. Your graphics card figures out the answer and types it back out in real-time. Because the AI runs on your own hardware, your chats are 100% private and uncensored!
 
-## Features
-
-- **Distributed ML drug screening** — nodes receive batches of candidate drug molecules, embed them via a ChemBERTa-77M-MTR chemistry transformer (Transformers.js), and score each by cosine similarity to known reference antibiotics — all entirely in-browser. Results are consensus-verified across multiple independent nodes before being accepted.
-- **Consensus verification** — every molecule chunk is assigned to 3 independent nodes. Scores are only accepted when at least 2 of 3 nodes agree within tolerance. No single node's result counts on its own.
-- **Browser-based LLM Inference** — uses WebLLM to run AI models entirely in the browser. The server routes user prompts to idle nodes, which stream the generated text back in real-time.
-- **Web Worker isolation** — all computation runs in a background thread; your UI stays completely responsive
-- **Real-time screening dashboard** — see consensus-verified screening progress, top candidate molecules, and your personal contribution stats
-- **Credit system** — credits are only awarded for verified compute (chunks that reached consensus), with a full audit trail
-- **Card Battler Game (The Forge)** — use your compute credits to buy Crystals, purchase cards from the shop, build a 4-card deck, and battle AI bots in an auto-battler with type-advantage mechanics.
-- **Leaderboard** — ranked by verified compute contributed, not raw submission count
-
----
-
-## Tech stack
-
-| Layer | Technology |
-|---|---|
-| Server | Node.js, Express, Socket.io |
-| Client | React, Vite |
-| Compute | Web Workers API, Transformers.js (ChemBERTa), WebLLM, WebGPU |
-| Database | Supabase (PostgreSQL) |
-| Auth | Google OAuth (JWT) |
-| Deployment | Railway / Render |
-
----
+**4. The network double-checks the work.**
+To make sure nobody is faking results to earn free credits, the server sends the exact same drug screening homework to three different people. It only accepts the answers (and pays out credits) if at least two browsers get the exact same result.
 
 ## Project structure
+Wondering how this all fits together? Here's where the magic happens:
+- **`client/`**: The entire React frontend. This includes the UI, the card game (The Forge), and the powerful background Web Workers that actually run the LLM and the ChemBERTa AI directly in your browser.
+- **`server/`**: The Node.js backend. Contains `index.js` (for the API) and `socketHandler.js` (which handles user authentication and routes homework chunks/chat messages to connected browsers).
+- **`shared/`**: Contains game logic and constant variables shared by both the client and server.
+- **`scripts/`**: Utility scripts, such as the tools used to convert and prep our AI models before we send them to the browsers.
 
-```
-computequest/
-├── server/
-│   ├── src/
-│   │   ├── index.js              # Express + Socket.io entry point
-│   │   ├── taskQueue.js          # Job queue: k=3 redundant chunk assignment, consensus state machine
-│   │   ├── socketHandler.js      # WebSocket events: routing tasks, consensus checking, credit gating
-│   │   ├── consensus.js          # Agreement checking, timing validation, reputation tracking
-│   │   ├── modelRegistry.js      # Active model version tracking, serves model info to clients
-│   │   └── routes/
-│   │       ├── auth.js           # Register, login, JWT issue
-│   │       ├── tasks.js          # Submit tasks, query results
-│   │       └── leaderboard.js    # Top contributors endpoint
-│   ├── models/
-│   │   ├── antibacterial_screen_v1.onnx  # Trained ML model (ECFP4 + GBM)
-│   │   └── model_validation.json         # Published validation metrics
-│   ├── data/
-│   │   └── library/                      # ZINC drug-like molecule chunks
-│   └── package.json
-│
-├── client/
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── WorkerManager.js      # Manages Web Worker lifecycle
-│   │   ├── workers/
-│   │   │   ├── computeWorker.js  # Web Worker: ONNX inference, RDKit fingerprints, WebLLM generation
-│   │   │   └── molecularScorer.js # RDKit.js ECFP4 fingerprinting + ONNX Runtime inference
-│   │   ├── forge/                # The Forge card game components
-│   │   │   ├── TheForge.jsx      # Main game hub
-│   │   │   ├── CardShop.jsx      # Buy cards with Crystals
-│   │   │   ├── DeckBuilder.jsx   # Assemble your 4-card deck
-│   │   │   ├── BattleScreen.jsx  # Auto-battler UI
-│   │   │   └── cardData.js       # Card catalog and battle logic
-│   │   └── components/
-│   │       ├── ScreeningProgress.jsx  # Network-level screening dashboard
-│   │       ├── TopCandidates.jsx      # Ranked candidate list + CSV export
-│   │       ├── Leaderboard.jsx        # Contributors + Forgemasters + Your Contribution
-│   │       └── Dashboard.jsx          # Live stats: nodes online, tasks/sec
-│   └── package.json
-│
-├── shared/
-│   └── constants.js              # Chunk size, consensus params, credit rates
-│
-├── supabase/
-│   └── migrations/
-│       ├── 01_molecule_scores.sql
-│       └── 02_consensus_screening.sql  # chunks, chunk_results, node_reputation, credit_events
-│
-└── README.md
-```
+## What am I actually contributing to?
+You are helping screen a massive library of chemical compounds to find ones that share structural similarities with known antibiotics. 
 
----
+> **Important note:** This is a similarity check, not a certified lab test! Finding a match here doesn't prove a molecule cures a disease. Instead, it narrows down a list of millions of random molecules into a highly-ranked shortlist of candidates worth a real scientist's attention in a physical lab.
+
+## Features
+- **Browser-Powered LLM:** Chat with a completely private, uncensored Large Language Model running locally on your own GPU via WebLLM. 
+- **Distributed Screening:** Real AI drug screening running entirely in your browser. No downloads or installations required.
+- **Consensus Verification:** The network double-checks answers using multiple browsers before trusting them, ensuring the scientific data is honest and accurate.
+- **Global Leaderboard:** Track which browser nodes have contributed the most verified work, and view the top molecules discovered by the community.
+- **The Forge (Card Game):** A full collectible card game built directly into the app to reward you for your compute power.
+
+## The Forge (the game part)
+Science pays! As your browser helps compute drug candidates and power the AI, you earn **credits**.
+
+- **Crystals:** Convert your hard-earned credits into crystals.
+- **Packs:** Use crystals to buy card packs and unlock unique heroes and spells.
+- **Deck Builder:** Assemble your best cards into a powerful deck.
+- **Battle Bots:** Test your deck against AI bots to win trophies and climb the Forgemaster Leaderboard!
+
+The battles use a rock-paper-scissors style advantage system. For example, Fire beats Nature, Nature beats Water, and Water beats Fire. Building a balanced deck is the key to victory!
+
+## Tech stack
+For the technical folks:
+
+| Component | Technology |
+|---|---|
+| **Server** | Node.js, Express, Socket.io |
+| **Client** | React, Vite |
+| **Compute** | Web Workers API, Transformers.js (ChemBERTa), WebLLM, WebGPU |
+| **Database** | Supabase (PostgreSQL) |
+| **Auth** | Google OAuth (JWT) |
 
 ## Getting started
+Want to run the network yourself? Follow these steps:
 
-### Prerequisites
+1. **Clone the repository**
+   Open your terminal and run:
+   \`\`\`bash
+   git clone https://github.com/Anonymous-Ekansh/ComputeQuest-hackwave.git
+   cd ComputeQuest-hackwave
+   \`\`\`
 
-- Node.js 18+
-- Supabase project (or local PostgreSQL)
+2. **Set up the environment variables**
+   Create a `.env` file in the `/server` folder and another `.env` file in the `/client` folder based on `.env.example`. Here is what you need:
+   
+   **Server (.env)**
+   - `PORT`: Port for the backend server (e.g., 3001).
+   - `JWT_SECRET`: Secret string to securely sign user sessions.
+   - `SUPABASE_URL`: The URL of your Supabase database project.
+   - `SUPABASE_SERVICE_KEY`: The master key to let the server write to the database.
+   - `GOOGLE_CLIENT_ID`: Your Google OAuth ID for user logins.
+   - `CLIENT_ORIGIN`: The URL where your frontend is running (e.g., http://localhost:5173).
 
-### Installation
+   **Client (.env)**
+   - `VITE_SERVER_URL`: The URL of the backend server (so the frontend knows where to connect).
+   - `VITE_GOOGLE_CLIENT_ID`: Your Google OAuth ID for rendering the login button.
+   - `VITE_MODEL_URL`: Where the app downloads AI models from (defaults to the local server).
 
-```bash
-# Clone the repo
-git clone https://github.com/your-org/computequest.git
-cd computequest
+3. **Install dependencies and start up**
+   Open two terminal windows.
+   
+   In Terminal 1 (Start the server):
+   \`\`\`bash
+   cd server
+   npm install
+   npm run dev
+   \`\`\`
+   
+   In Terminal 2 (Start the client):
+   \`\`\`bash
+   cd client
+   npm install
+   npm run dev
+   \`\`\`
 
-# Install server dependencies
-cd server && npm install
+4. Open `http://localhost:5173` in your browser. Open a second tab to see multiple "nodes" connect and start verifying each other's work!
 
-# Install client dependencies
-cd ../client && npm install
-```
-
-### Run locally
-
-```bash
-# Terminal 1 — server
-cd server && npm run dev
-
-# Terminal 2 — client
-cd client && npm run dev
-```
-
-Open `http://localhost:5173`. Open a second tab — you'll see both register as nodes on the dashboard.
-
----
-
-## How the distributed compute works
-
-### Distributed Drug Screening (Consensus-Verified)
-
-```
-[Server, once, tiny]
-Embed ~10 known reference antibiotics → store as static JSON → ship to all nodes
-
-[Live system]
-Molecule library (chunked)
-        │
-        ▼
-  Server: Task Orchestrator ── assigns chunk to 3 nodes ──▶ Node A, Node B, Node C
-        │                                                         │
-        │◀──── each node: ChemBERTa embedding + cosine similarity ─┘
-        ▼
-  Server: Consensus Check (2-of-3 agreement within ±0.02)
-        ▼
-  Server: Credit Ledger (pay only for verified, agreed work)
-        ▼
-  Dashboard: Screening Progress + Top Candidates + CSV Export
-```
-
-#### Task lifecycle
-1. The server loads a library of candidate drug molecules.
-2. `taskQueue.js` splits the library into chunks (~30 molecules each) and assigns each chunk to **3 independent nodes** (k=3 redundancy).
-3. Each node's `computeWorker.js` receives the chunk plus reference antibiotic data, embeds each SMILES string via ChemBERTa-77M-MTR (Transformers.js), and scores by cosine similarity to reference antibiotic embeddings — all in-browser.
-4. Each node returns: `{ scores, wall_clock_ms, model_version, chunk_id }`.
-5. `consensus.js` checks agreement: for each molecule, accepts if ≥2 of 3 node scores are within ±0.02 of each other. Rejects implausibly fast results.
-6. **Credits are only awarded after consensus passes.** Nodes whose scores didn't agree get no credit for that chunk.
-7. Consensus-accepted results are merged into the master ranked list — the actual scientific output of the network.
-8. If consensus fails, the chunk is requeued to 3 *different* nodes.
-
-#### Credit formula
-```
-credit_awarded(node) =
-    base_rate
-    × verified_compute_seconds
-    × agreement_bonus (1.0 if agreed, 0 if not)
-    × reputation_multiplier (tracks historical agreement rate)
-```
-
-### AI Inference (Request-Parallel)
-1. A user submits a prompt to the AI assistant
-2. The server identifies an idle node that is "warm" (already has the model loaded in WebLLM)
-3. The prompt is routed to the assigned node
-4. The node's `computeWorker.js` generates the response locally using WebGPU and WebLLM, streaming tokens back to the server in real-time
-5. The server relays the streamed tokens to the requesting user
-
----
-
-## What we're screening
-
-ComputeQuest nodes screen a library of candidate drug molecules for **structural similarity to known antibiotics** using a pretrained chemistry transformer.
-
-### The model
-- **Architecture:** DeepChem/ChemBERTa-77M-MTR — a small pretrained RoBERTa transformer trained on molecular property prediction tasks
-- **Method:** Embed candidate SMILES strings into 384-dimensional vectors, then score by cosine similarity to 10 reference antibiotic embeddings
-- **Output:** Similarity score (0–1) — how structurally similar a candidate is to known antibiotics
-- **Runtime:** Transformers.js — runs entirely in-browser, cached after first download
-
-### Reference antibiotics
-The system compares candidates against 10 known antibiotics from diverse classes: Penicillin G, Amoxicillin, Ciprofloxacin, Tetracycline, Erythromycin, Trimethoprim, Vancomycin, Halicin (the AI-discovered one), Metronidazole, and Doxycycline.
-
-> **Caveat:** This is a structural-similarity proxy for bioactivity, not a trained antibacterial classifier. It's an honest, deployable v1 that captures molecular structure/property patterns. A supervised model trained on real bioactivity labels (ChEMBL) is the natural next step. Confirming any candidate requires laboratory testing.
-
-### Dashboard views
-
-1. **Screening Progress** — Consensus-verified molecules screened / total library. Only advances when independent nodes agree.
-2. **Top Candidates** — Ranked by consensus-verified predicted antibacterial activity. Exportable as CSV.
-3. **Your Contribution** — Personal verified chunks, agreement rate, credits earned from consensus work.
-
----
-
-## Game mechanics: The Forge
-
-The Forge is a card battler layered on top of the real compute activity. 
-
-### Economy
-As your node processes compute tasks and your results pass consensus verification, you earn **Credits**. These credits can be converted into **Crystals** (100 credits = 1 Crystal) to spend in the Card Shop. 
-
-### Cards & Deck Building
-You can purchase cards of varying rarities (Common, Uncommon, Rare) and assemble a 4-card deck. Each card has:
-- **Type**: OVERCLOCK, COOLANT, or FIRMWARE
-- **Attack** & **Defense**: Used to calculate total power
-- **Cost**: Crystal price
-
-### Battles
-When you enter a battle, your 4-card deck faces off against a bot's deck in a 4-round auto-battler. The winner of each round is determined by total power (Attack + Defense), modified by type advantage.
-
-**Type Advantage (1.5x Power Multiplier):**
-- **OVERCLOCK** beats **COOLANT**
-- **COOLANT** beats **FIRMWARE**
-- **FIRMWARE** beats **OVERCLOCK**
-
-Win battles to earn Trophies and face harder bot tiers!
-
----
+## Known limitations
+- The current drug screening model relies on structural similarity rather than a trained biological classifier. It's a great proxy signal, but shouldn't be treated as medical advice or a definitive cure.
+- The built-in LLM AI chat requires a WebGPU-capable browser (like Chrome or Edge) to function properly since it runs completely on your hardware.
 
 ## Contributing
-
-We use a branch-per-feature workflow. All merges to `main` require one PR review.
-
-```bash
-# Create your feature branch
-git checkout -b feat/your-feature-name
-
-# Work, commit often
-git commit -m "feat: add chunk verification to taskQueue"
-
-# Push and open a PR against dev
-git push origin feat/your-feature-name
-```
-
-### Commit message format
-
-```
-feat: add WebSocket reconnection with exponential backoff
-fix: chunk reassembly fails when nodes disconnect mid-task
-chore: add eslint + prettier config
-docs: update architecture diagram in README
-```
-
-### Branch structure
-
-| Branch | Purpose |
-|---|---|
-| `main` | Always deployable, demo-ready |
-| `dev` | Integration — merge features here first |
-| `feat/*` | Individual features |
-| `fix/*` | Bug fixes |
+We welcome contributions! When submitting changes, please follow these conventions:
+- **Branch names**: Use prefixes like `feat/` (for new features), `fix/` (for bug fixes), or `docs/` (for README changes) so we know what kind of work you're doing at a glance.
+- **Commit messages**: Write clear, descriptive commit messages (e.g., "fix: resolve scoring crash on mobile") so the project history is easy for everyone to read and understand.
