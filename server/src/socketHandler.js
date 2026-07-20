@@ -687,38 +687,6 @@ function setupSocketHandler(io) {
 
         if (recordStatus === 'ignored') return;
 
-            // Update leaderboard with consensus-verified scores
-            updateMoleculeLeaderboard(consensus.acceptedScores, consensus.agreedNodeIds).catch(err => {
-              console.error('[leaderboard] Update error:', err);
-            });
-
-            // Award credits to agreeing nodes (consensus-gated!)
-    // ── handle molecule batch results ──────────────────
-    socket.on('molecule_batch_result', async (data) => {
-      try {
-        if (!data || typeof data.batchId !== 'string' || !Array.isArray(data.results)) {
-          console.warn(`[result] Malformed molecule_batch_result from ${socket.id}`);
-          markIdle(socket.id, io);
-          return;
-        }
-
-        const { batchId, results, computeMs } = data;
-        const node = nodes.get(socket.id);
-
-        const elapsed = computeMs || 0;
-        const prev = nodePerformance.get(socket.id);
-        if (prev) {
-          prev.avgMsPerBatch = prev.avgMsPerBatch * 0.7 + elapsed * 0.3;
-          prev.samples++;
-        } else {
-          nodePerformance.set(socket.id, { avgMsPerBatch: elapsed, samples: 1 });
-        }
-
-        const recordStatus = chunkManager.recordResult(batchId, socket.id);
-        markIdle(socket.id, io);
-
-        if (recordStatus === 'ignored') return;
-
         console.log(`[result] ✓ ${batchId} PASSED from ${socket.id}`);
 
         updateMoleculeLeaderboard(results).catch(err => {
