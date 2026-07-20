@@ -22,6 +22,12 @@ function App() {
   const [screeningProgress, setScreeningProgress] = useState(null);
   const [topMolecules, setTopMolecules] = useState([]);
 
+  // UI Layout States
+  const [currentView, setCurrentView] = useState('arena'); // 'arena' or 'lab'
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(true);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isLogExpanded, setIsLogExpanded] = useState(false);
+
   const [userInfo, setUserInfo] = useState({
     username: 'Anonymous Node',
     credits: 0,
@@ -274,45 +280,68 @@ function App() {
   return (
     <div className="app-shell">
       {/* ── Left Sidebar (Compute Panel) ── */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${isSidebarExpanded ? 'expanded' : 'collapsed'}`}>
         <div className="sidebar-inner">
-          <h1 className="sidebar-title">ComputeQuest</h1>
-          <p className="tagline">Donate your browser's computing power</p>
+          <div className="sidebar-header">
+            {isSidebarExpanded && (
+              <div>
+                <h1 className="sidebar-title">ComputeQuest</h1>
+                <p className="tagline">Distributed Network</p>
+              </div>
+            )}
+            <button className="sidebar-toggle" onClick={() => setIsSidebarExpanded(!isSidebarExpanded)} title="Toggle Sidebar">
+              {isSidebarExpanded ? '◀' : '▶'}
+            </button>
+          </div>
 
           {/* Auth Card */}
           <div className="auth-card">
             {userInfo.isAuthenticated ? (
               <div className="auth-logged-in">
-                <div className="auth-user-info">
-                  <strong className="user-meta">{userInfo.username}</strong>
-                  <span className="credit-display" title="Credits earned from computing">
-                    <span className="credit-icon"></span>
-                    <span className="credit-value">{userInfo.credits} credits</span>
-                  </span>
-                </div>
-                <button className="auth-btn secondary" onClick={handleLogout}>Logout</button>
+                {isSidebarExpanded && (
+                  <div className="auth-user-info">
+                    <strong className="user-meta">{userInfo.username}</strong>
+                    <span className="credit-display" title="Credits earned from computing">
+                      <span className="credit-icon"></span>
+                      <span className="credit-value">{userInfo.credits} cr</span>
+                    </span>
+                  </div>
+                )}
+                {!isSidebarExpanded && (
+                  <div className="auth-user-info compact" title={`${userInfo.username} - ${userInfo.credits} cr`}>
+                    <strong className="user-meta">{userInfo.username.charAt(0).toUpperCase()}</strong>
+                  </div>
+                )}
+                <button className={`auth-btn secondary ${!isSidebarExpanded ? 'icon-only' : ''}`} onClick={handleLogout} title="Logout">
+                  {isSidebarExpanded ? 'Logout' : '⏻'}
+                </button>
               </div>
             ) : (
               <div className="auth-fields">
-                <h3>Sign In to Compute</h3>
+                {isSidebarExpanded ? <h3>Sign In to Compute</h3> : <h3 title="Sign In">Login</h3>}
                 <div className="auth-row" style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
                   <GoogleLogin
                     onSuccess={handleGoogleSuccess}
                     onError={() => addLog('Google Login Failed')}
+                    type={isSidebarExpanded ? "standard" : "icon"}
                   />
                 </div>
               </div>
             )}
           </div>
 
-          <div className="status-bar">
+          <div className="status-bar" title={connected ? 'Connected' : 'Disconnected'}>
             <div className={`status-dot ${connected ? 'online' : 'offline'}`} />
-            <span>{connected ? 'Connected' : 'Disconnected'}</span>
-            <span className="separator">·</span>
-            <span>{nodeCount} node{nodeCount !== 1 ? 's' : ''} online</span>
+            {isSidebarExpanded && (
+              <>
+                <span>{connected ? 'Connected' : 'Disconnected'}</span>
+                <span className="separator">·</span>
+                <span>{nodeCount} node{nodeCount !== 1 ? 's' : ''}</span>
+              </>
+            )}
           </div>
 
-          {userInfo.isAuthenticated && (
+          {userInfo.isAuthenticated && isSidebarExpanded && (
             <>
               {/* Task Progress Bar */}
               {screeningProgress && (
@@ -330,12 +359,13 @@ function App() {
                 </div>
               )}
 
-              <div className="stats">
-                <div className="stat-card">
+              {/* Quick Stats Summary */}
+              <div className="stats-mini">
+                <div className="stat-card-mini">
                   <div className="stat-value">{screeningProgress?.moleculesVerified || screeningProgress?.moleculesScored || 0}</div>
                   <div className="stat-label">Verified</div>
                 </div>
-                <div className="stat-card">
+                <div className="stat-card-mini">
                   <div className="stat-value">
                     {topMolecules.length > 0 ? (topMolecules[0].similarity ?? topMolecules[0].composite_score)?.toFixed(3) : '-'}
                   </div>
@@ -343,71 +373,103 @@ function App() {
                 </div>
               </div>
 
+              {/* Compact Activity Log */}
               <div className="log-container">
-                <h3>Activity Log</h3>
-                <div className="log">
-                  {log.length === 0 && <div className="log-entry dim">Waiting for connection...</div>}
-                  {log.map((entry, i) => (
-                    <div key={i} className="log-entry">{entry}</div>
-                  ))}
+                <div className="log-header" onClick={() => setIsLogExpanded(!isLogExpanded)}>
+                  <h3>Activity Log</h3>
+                  <span>{isLogExpanded ? '▼' : '▲'}</span>
                 </div>
+                {isLogExpanded && (
+                  <div className="log">
+                    {log.length === 0 && <div className="log-entry dim">Waiting for connection...</div>}
+                    {log.map((entry, i) => (
+                      <div key={i} className="log-entry">{entry}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             </>
           )}
 
-          {!userInfo.isAuthenticated && (
+          {!userInfo.isAuthenticated && isSidebarExpanded && (
             <div className="sidebar-cta">
-              <p>Sign in with Google to start contributing compute and earn credits to convert into crystals for The Forge!</p>
+              <p>Sign in to contribute compute and earn credits for The Forge!</p>
             </div>
           )}
 
-          {/* Background Warmup Progress */}
-          {warmProgress && warmProgress.percent < 100 && (
-            <div style={{ marginTop: '20px' }}>
-              <WarmupProgress warmProgress={warmProgress} />
-            </div>
-          )}
-
-          {/* Global Inference Pipeline Visualization */}
-          <Dashboard socket={socketRef.current} />
-
-          {/* Leaderboard */}
-          <Leaderboard />
-
-          {/* Device Benchmark Footer */}
-          {userInfo.isAuthenticated && (isBenchmarking || deviceBenchmark) && (
-            <div className="benchmark-footer">
-              {isBenchmarking ? (
-                <span>Benchmarking device…</span>
-              ) : deviceBenchmark ? (
-                <span>{deviceBenchmark.cores} cores · {deviceBenchmark.latency.toFixed(0)}ms · {(deviceBenchmark.computeScore / 1000000).toFixed(1)}M ops/s</span>
-              ) : null}
-            </div>
+          {isSidebarExpanded && (
+            <>
+              {warmProgress && warmProgress.percent < 100 && (
+                <div style={{ marginTop: '20px' }}>
+                  <WarmupProgress warmProgress={warmProgress} />
+                </div>
+              )}
+              <Dashboard socket={socketRef.current} />
+              <Leaderboard />
+              {(isBenchmarking || deviceBenchmark) && (
+                <div className="benchmark-footer">
+                  {isBenchmarking ? (
+                    <span>Benchmarking device…</span>
+                  ) : deviceBenchmark ? (
+                    <span>{deviceBenchmark.cores}c · {deviceBenchmark.latency.toFixed(0)}ms · {(deviceBenchmark.computeScore / 1000000).toFixed(1)}M/s</span>
+                  ) : null}
+                </div>
+              )}
+            </>
           )}
         </div>
       </aside>
 
       {/* ── Right Panel (Main Content) ── */}
-      <main className="main-panel" style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
-        <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0 }}>
-          <div style={{ flex: 1, position: 'relative', overflowY: 'auto' }}>
+      <main className="main-panel">
+        
+        {/* Top Nav Switcher */}
+        <header className="top-nav">
+          <div className="nav-tabs">
+            <button 
+              className={`nav-tab arena-tab ${currentView === 'arena' ? 'active' : ''}`} 
+              onClick={() => setCurrentView('arena')}
+            >
+              Battle Arena
+            </button>
+            <button 
+              className={`nav-tab lab-tab ${currentView === 'lab' ? 'active' : ''}`} 
+              onClick={() => setCurrentView('lab')}
+            >
+              Research Lab
+            </button>
+          </div>
+        </header>
+
+        {/* Dynamic View Container */}
+        <div className="view-container">
+          {currentView === 'arena' ? (
             <TheForge
               socket={socketRef.current}
               userInfo={userInfo}
               isAuthenticated={userInfo.isAuthenticated}
             />
+          ) : (
+            <ResearchPanel topMolecules={topMolecules} screeningProgress={screeningProgress} log={log} />
+          )}
+        </div>
+
+        {/* Chat Slide-out Drawer */}
+        <div className={`chat-drawer ${isChatOpen ? 'open' : ''}`}>
+          <div className="chat-drawer-header">
+            <h4>HackWave LLM</h4>
+            <button className="chat-close-btn" onClick={() => setIsChatOpen(false)}>×</button>
           </div>
-          
-          {/* HackWave AI Chat Panel */}
-          <div style={{ width: '300px', flexShrink: 0, height: '100%', overflowY: 'auto', borderLeft: '1px solid #27272a', background: '#09090b' }}>
+          <div className="chat-drawer-body">
             <ChatPanel socket={socketRef.current} />
           </div>
         </div>
         
-        {/* Research Panel at Bottom */}
-        <div style={{ flexShrink: 0 }}>
-          <ResearchPanel topMolecules={topMolecules} screeningProgress={screeningProgress} />
-        </div>
+        {/* Chat FAB */}
+        <button className={`chat-fab ${isChatOpen ? 'hidden' : ''}`} onClick={() => setIsChatOpen(true)}>
+          💬
+        </button>
+
       </main>
     </div>
   );

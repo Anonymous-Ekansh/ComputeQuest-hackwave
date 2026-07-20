@@ -8,12 +8,34 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
     window.open(`${SERVER_URL}/api/screening/export`, '_blank');
   };
 
+  const topScore = topMolecules.length > 0 
+    ? (topMolecules[0].similarity ?? topMolecules[0].composite_score)?.toFixed(4) 
+    : '-';
+
   return (
     <div className="research-panel">
+      
+      {/* Big Glowing Stats Header */}
+      <div className="lab-hero-stats">
+        <div className="hero-stat-card">
+          <div className="hero-stat-value">
+            {screeningProgress?.moleculesVerified || screeningProgress?.moleculesScored || 0}
+          </div>
+          <div className="hero-stat-label">Molecules Verified</div>
+        </div>
+        <div className="hero-stat-card">
+          <div className="hero-stat-value">
+            {topScore}
+          </div>
+          <div className="hero-stat-label">Top Similarity Score</div>
+        </div>
+      </div>
+
       <div className="research-header">
-        <h3>Research Panel: Distributed Drug Screening</h3>
+        <h3>Consensus-Verified Distributed Screening</h3>
         <p className="explainer">
-          Your browser is running a ChemBERTa ML model to screen candidate molecules by structural similarity to known antibiotics — verified by consensus across multiple independent nodes.
+          The network is screening candidate molecules by structural similarity to known antibiotics using a ChemBERTa ML model. 
+          Results are verified by k=3 consensus across independent nodes.
         </p>
       </div>
 
@@ -21,10 +43,6 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
       {screeningProgress && (
         <div className="screening-stats">
           <div className="stat-row">
-            <span className="stat-item">
-              <strong>{screeningProgress.moleculesVerified || 0}</strong>
-              <small> / {screeningProgress.totalMolecules || 0} molecules verified</small>
-            </span>
             <span className="stat-item">
               <strong>{screeningProgress.completedChunks || 0}</strong>
               <small> / {screeningProgress.totalChunks || 0} chunks consensus-complete</small>
@@ -40,19 +58,13 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
               </span>
             )}
           </div>
-          <div className="progress-track" style={{ marginTop: '8px' }}>
-            <div
-              className="progress-fill"
-              style={{ width: `${screeningProgress.percentComplete || 0}%` }}
-            />
-          </div>
         </div>
       )}
 
-      {/* Top Candidates */}
+      {/* Top Candidates Table */}
       <div className="research-leaderboard">
         <div className="leaderboard-header">
-          <h4>Top Candidates (Consensus-Verified)</h4>
+          <h4>Top Candidates</h4>
           {topMolecules.length > 0 && (
             <button className="export-btn" onClick={handleExportCSV}>
               Export CSV
@@ -71,22 +83,22 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
               </tr>
             </thead>
             <tbody>
-              {topMolecules.slice(0, 10).map((mol, idx) => (
+              {topMolecules.slice(0, 15).map((mol, idx) => (
                 <tr key={mol.smiles}>
-                  <td>#{idx + 1}</td>
+                  <td className="rank-col">#{idx + 1}</td>
                   <td>
                     <div className="mol-name" title={mol.smiles}>
-                      {mol.smiles.length > 35 ? mol.smiles.slice(0, 35) + '…' : mol.smiles}
+                      {mol.smiles}
                     </div>
                   </td>
-                  <td>{(mol.similarity ?? mol.composite_score)?.toFixed(4) ?? '-'}</td>
+                  <td className="score-col">{(mol.similarity ?? mol.composite_score)?.toFixed(4) ?? '-'}</td>
                   <td>{mol.closestRef || '-'}</td>
                   <td>{mol.agreementCount || '-'} nodes</td>
                 </tr>
               ))}
               {topMolecules.length === 0 && (
                 <tr>
-                  <td colSpan="5">No consensus-verified molecules yet — waiting for nodes to agree...</td>
+                  <td colSpan="5" className="empty-state">No consensus-verified molecules yet — waiting for nodes to agree...</td>
                 </tr>
               )}
             </tbody>
