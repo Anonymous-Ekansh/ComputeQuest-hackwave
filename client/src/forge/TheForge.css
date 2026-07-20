@@ -201,7 +201,7 @@
 .game-card {
   position: relative;
   width: 140px;
-  min-height: 190px;
+  height: 210px;
   border-radius: 4px;
   padding: 14px 12px;
   display: flex;
