@@ -41,6 +41,7 @@ export async function ensureModel(onProgress) {
   extractorPromise = (async () => {
     try {
       const pipe = await pipeline('feature-extraction', MODEL_ID, {
+        dtype: 'fp32',
         progress_callback: (progress) => {
           if (onProgress && progress.status === 'progress') {
             onProgress({

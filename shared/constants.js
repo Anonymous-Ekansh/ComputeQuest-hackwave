@@ -26,7 +26,7 @@ const MAX_UPGRADES_PER_CARD = 10;
 // ── Consensus-verified distributed screening ─────────────────────────────────
 const CONSENSUS_K = 3;                     // nodes per chunk (redundancy factor)
 const CONSENSUS_TOLERANCE = 0.02;          // max score delta for two nodes to "agree"
-const MIN_COMPUTE_MS_PER_MOLECULE = 5;     // timing sanity floor (ms) — reject results faster than this
+const MIN_COMPUTE_MS_PER_MOLECULE = 100;   // timing sanity floor (ms) — reject results faster than this
 const SCREENING_CHUNK_SIZE = 30;           // molecules per chunk (tune after benchmarking)
 const CREDIT_BASE_RATE = 1;               // base credits per molecule in a verified chunk
 
