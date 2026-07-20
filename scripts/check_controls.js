@@ -1,10 +1,6 @@
-const fetch = require('node-fetch'); // We can use native fetch in Node 18+, but let's be safe if they use 16. Actually, let's use global fetch for Node 18+.
-
 async function main() {
   try {
-    // Try to use global fetch if available (Node 18+)
-    const fetchFn = typeof fetch !== 'undefined' ? fetch : require('node-fetch');
-    const res = await fetchFn('http://localhost:3001/api/screening/controls-check');
+    const res = await fetch('http://localhost:3001/api/screening/controls-check');
     if (!res.ok) {
       throw new Error(`HTTP error! status: ${res.status}`);
     }

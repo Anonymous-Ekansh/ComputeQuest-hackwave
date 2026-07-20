@@ -193,8 +193,7 @@ const chunkManager = new ChunkManager();
 // Top-100 molecule leaderboard (consensus-verified only)
 let topMolecules = [];
 const TOP_MOLECULES_LIMIT = 100;
-
-// Aggregate stats
+let allScoresMap = new Map();
 let totalVerifiedComputeSeconds = 0;
 
 // ── pipeline state ───────────────────────────────────────────────────────────
@@ -270,18 +269,21 @@ async function loadPersistedLeaderboard() {
         .from('molecule_scores')
         .select('smiles, binding_affinity_kcal_mol, target_id')
         .order('binding_affinity_kcal_mol', { ascending: true })
-        .limit(TOP_MOLECULES_LIMIT);
+        // limit(20000) to ensure we get all data without pagination issues for this dataset size
+        .limit(20000);
         
       if (error) throw error;
       if (data && data.length > 0) {
-        topMolecules = data.map(r => ({
+        data.forEach(r => {
+          allScoresMap.set(r.smiles, r.binding_affinity_kcal_mol);
+        });
+        
+        topMolecules = data.slice(0, TOP_MOLECULES_LIMIT).map(r => ({
           smiles: r.smiles,
           affinity: r.binding_affinity_kcal_mol,
           source: 'real',
-          // Note: we don't have confirm states in Supabase initially, 
-          // but we will hydrate what we have.
         }));
-        console.log(`[leaderboard] Restored ${topMolecules.length} top molecules from Supabase`);
+        console.log(`[leaderboard] Restored ${topMolecules.length} top molecules and loaded ${allScoresMap.size} scores into memory from Supabase`);
       }
     } catch (err) {
       console.error('[leaderboard] Failed to restore from Supabase:', err.message);
@@ -392,6 +394,11 @@ async function updateMoleculeLeaderboard(chunkScores, isConfirmPass) {
   let added = 0;
   for (const mol of chunkScores) {
     if (mol == null || typeof mol.affinity !== 'number') continue;
+    
+    // Update uncapped map
+    if (!isConfirmPass || !allScoresMap.has(mol.smiles)) {
+      allScoresMap.set(mol.smiles, mol.affinity);
+    }
 
     const existingIdx = topMolecules.findIndex(m => m.smiles === mol.smiles);
     if (existingIdx >= 0) {
@@ -1513,22 +1520,32 @@ function getControlsCheck() {
   const allControls = moleculeLibrary.filter(m => m.name && m.name.includes('(Control)'));
   const controlSmiles = new Set(allControls.map(m => m.smiles));
 
-  const decoys = topMolecules.filter(m => !controlSmiles.has(m.smiles));
-  const controlsFound = topMolecules.filter(m => controlSmiles.has(m.smiles));
+  // Build the decoy and control arrays from the uncapped allScoresMap
+  const allScoresArr = Array.from(allScoresMap.entries()).map(([smiles, affinity]) => ({
+    smiles,
+    affinity
+  }));
+  
+  // Sort them ascending (best affinity first) to determine rank
+  allScoresArr.sort((a, b) => a.affinity - b.affinity);
+
+  const decoys = allScoresArr.filter(m => !controlSmiles.has(m.smiles));
+  const controlsFound = allScoresArr.filter(m => controlSmiles.has(m.smiles));
 
   let decoyMedian = 0;
   let decoyMean = 0;
   if (decoys.length > 0) {
     const sum = decoys.reduce((acc, m) => acc + (m.affinity || 0), 0);
     decoyMean = sum / decoys.length;
-    const sorted = [...decoys].map(m => m.affinity || 0).sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    decoyMedian = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
+    // Decoys are already sorted since allScoresArr was sorted
+    const mid = Math.floor(decoys.length / 2);
+    decoyMedian = decoys.length % 2 !== 0 ? decoys[mid].affinity : (decoys[mid - 1].affinity + decoys[mid].affinity) / 2.0;
   }
 
   const results = controlsFound.map(m => {
-    const rank = topMolecules.findIndex(x => x.smiles === m.smiles) + 1;
-    let verdict = 'FAIL: Control ranks below median';
+    // Find the rank across ALL scored molecules
+    const rank = allScoresArr.findIndex(x => x.smiles === m.smiles) + 1;
+    let verdict = 'FAIL: Control ranks below median decoy — pipeline likely broken';
     if (decoyMedian !== 0) {
       if (m.affinity < decoyMedian) {
         verdict = 'PASS: Control binds better than median decoy';
@@ -1545,7 +1562,7 @@ function getControlsCheck() {
   });
 
   return {
-    totalScored: topMolecules.length,
+    totalScored: allScoresArr.length,
     decoyMedian,
     decoyMean,
     controls: results
