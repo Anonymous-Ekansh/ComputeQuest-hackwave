@@ -1,217 +1,134 @@
 .research-panel {
-  background: transparent;
-  padding: 24px 32px;
-  height: 100%;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-
-/* ── Hero Stats ─────────────────────────────────────────────────────────────── */
-.lab-hero-stats {
-  display: flex;
-  gap: 24px;
-  margin-bottom: 32px;
-}
-
-.hero-stat-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 24px;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  position: relative;
-  overflow: hidden;
-}
-
-.hero-stat-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 4px;
-  height: 100%;
-  background: var(--accent-science);
-  box-shadow: 0 0 16px var(--accent-science-glow);
-}
-
-.hero-stat-value {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 2.5rem;
-  font-weight: 700;
-  color: var(--accent-science);
-  text-shadow: 0 0 20px var(--accent-science-glow);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  margin-bottom: 8px;
-}
-
-.hero-stat-label {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
-  font-weight: 600;
-}
-
-/* ── Header ─────────────────────────────────────────────────────────────────── */
-.research-header {
-  margin-bottom: 24px;
+  background: #111113;
+  border-top: 1px solid #27272a;
+  padding: 16px 24px;
 }
 
 .research-header h3 {
-  margin: 0 0 8px 0;
-  font-size: 1.25rem;
-  color: var(--text-main);
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  color: #e4e4e7;
 }
 
 .research-header .explainer {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--text-muted);
-  line-height: 1.5;
-  max-width: 800px;
+  margin: 0 0 12px 0;
+  font-size: 11px;
+  color: #71717a;
+  line-height: 1.4;
 }
 
-/* ── Screening Stats ────────────────────────────────────────────────────────── */
+/* Screening Stats */
 .screening-stats {
-  margin-bottom: 24px;
-  background: var(--bg-card);
-  padding: 16px 20px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  margin-bottom: 14px;
 }
 
 .stat-row {
   display: flex;
-  gap: 32px;
+  gap: 20px;
   flex-wrap: wrap;
 }
 
 .stat-item {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+  font-size: 12px;
+  color: #a1a1aa;
 }
 
 .stat-item strong {
-  color: var(--accent-science);
-  font-size: 1.1rem;
-  font-family: 'Space Grotesk', sans-serif;
-  text-shadow: 0 0 8px var(--accent-science-glow);
+  color: #818cf8;
+  font-size: 14px;
 }
 
-/* ── Leaderboard Table ──────────────────────────────────────────────────────── */
-.research-leaderboard {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  flex: 1;
+.stat-item small {
+  color: #71717a;
+  margin-left: 2px;
 }
 
+/* Leaderboard Header */
 .leaderboard-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
 }
 
 .leaderboard-header h4 {
   margin: 0;
-  font-size: 1.1rem;
-  color: var(--text-main);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  font-size: 13px;
+  color: #d4d4d8;
 }
 
 .export-btn {
-  background: transparent;
-  color: var(--accent-science);
-  border: 1px solid var(--accent-science);
-  padding: 6px 16px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  background: #1e1b4b;
+  color: #818cf8;
+  border: 1px solid #312e81;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 11px;
   cursor: pointer;
-  transition: all 0.2s;
-  box-shadow: 0 0 10px rgba(34, 211, 238, 0.1) inset;
+  transition: background 0.2s;
 }
 
 .export-btn:hover {
-  background: var(--accent-science-glow);
-  box-shadow: 0 0 15px rgba(34, 211, 238, 0.3) inset;
+  background: #312e81;
+}
+
+/* Table */
+.research-leaderboard {
+  margin-top: 4px;
 }
 
 .table-responsive {
   overflow-x: auto;
-  flex: 1;
 }
 
 .research-panel table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: 12px;
 }
 
 .research-panel th {
   text-align: left;
-  padding: 12px 20px;
-  color: var(--text-muted);
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.75rem;
+  padding: 6px 8px;
+  color: #71717a;
+  font-weight: 500;
+  border-bottom: 1px solid #27272a;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 1px;
-  background: rgba(17, 17, 22, 0.5);
-  position: sticky;
-  top: 0;
-  z-index: 2;
+  letter-spacing: 0.5px;
 }
 
 .research-panel td {
-  padding: 12px 20px;
-  color: var(--text-main);
-  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  color: #d4d4d8;
+  border-bottom: 1px solid #1a1a1c;
 }
 
 .research-panel tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
+  background: #18181b;
 }
 
 .mol-name {
   font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  font-size: 11px;
+  color: #a1a1aa;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.rank-col {
-  color: var(--text-muted);
-  font-family: 'Space Grotesk', sans-serif;
-  font-weight: 600;
+/* Progress track reuse */
+.screening-stats .progress-track {
+  height: 4px;
+  background: #27272a;
+  border-radius: 2px;
+  overflow: hidden;
 }
 
-.score-col {
-  color: var(--accent-science) !important;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  font-family: 'Space Grotesk', sans-serif;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 40px !important;
-  color: var(--text-muted) !important;
-  font-style: italic;
+.screening-stats .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #818cf8, #6366f1);
+  border-radius: 2px;
+  transition: width 0.5s ease;
 }
