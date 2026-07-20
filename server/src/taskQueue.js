@@ -15,6 +15,7 @@ class ChunkManager {
     this.totalChunks = 0;
     this.completedChunks = 0;
     this.runId = null;
+    this.stats = { passed: 0, failedDisagreement: 0, failedNoRealData: 0 };
   }
 
   initRun(moleculeLibrary, chunkSize = SCREENING_CHUNK_SIZE, runId = null) {
@@ -27,6 +28,7 @@ class ChunkManager {
     this.unassignedQueue = [];
     this.completedChunks = 0;
     this.runId = runId || `screen_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    this.stats = { passed: 0, failedDisagreement: 0, failedNoRealData: 0 };
 
     for (let i = 0; i < moleculeLibrary.length; i += chunkSize) {
       const slice = moleculeLibrary.slice(i, i + chunkSize);
@@ -50,6 +52,26 @@ class ChunkManager {
       `[taskQueue] Initialized run ${this.runId}: ${this.totalChunks} chunks, ` +
       `${moleculeLibrary.length} molecules, ${chunkSize}/chunk`
     );
+  }
+
+  queueConfirmChunk(molecule) {
+    // Queue a single molecule for confirm rescore
+    const chunkId = `confirm_${molecule.smiles}`;
+    if (this.chunks.has(chunkId)) return; // Already queued or done
+
+    this.chunks.set(chunkId, {
+      chunkId,
+      molecules: [molecule],
+      status: 'unassigned',
+      assignedNodes: new Map(),
+      results: [],
+      retries: 0,
+      isConfirmPass: true,
+      exhaustiveness: 8
+    });
+    
+    this.unassignedQueue.unshift(chunkId); // High priority
+    this.totalChunks++;
   }
 
   getNextChunkForNode(socketId, userId) {
@@ -183,6 +205,7 @@ class ChunkManager {
         : 0,
       totalMolecules: this.totalChunks * SCREENING_CHUNK_SIZE,
       moleculesVerified: this.completedChunks * SCREENING_CHUNK_SIZE,
+      stats: this.stats
     };
   }
 

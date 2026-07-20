@@ -30,7 +30,7 @@ app.get('/', (req, res) => {
 });
 
 // set up websocket handling
-const { setupSocketHandler, getLeaderboard, getForgemasterLeaderboard, getMoleculeLeaderboard, getScreeningProgress } = require('./socketHandler');
+const { setupSocketHandler, getLeaderboard, getForgemasterLeaderboard, getMoleculeLeaderboard, getScreeningProgress, getControlsCheck } = require('./socketHandler');
 setupSocketHandler(io);
 
 app.get('/api/leaderboard', async (req, res) => {
@@ -62,6 +62,16 @@ app.get('/api/screening/progress', (req, res) => {
   } catch (err) {
     console.error('Screening progress fetch error:', err);
     res.status(500).json({ error: 'Failed to fetch screening progress' });
+  }
+});
+
+// New: controls check
+app.get('/api/screening/controls-check', (req, res) => {
+  try {
+    res.json(getControlsCheck());
+  } catch (err) {
+    console.error('Controls check fetch error:', err);
+    res.status(500).json({ error: 'Failed to run controls check' });
   }
 });
 

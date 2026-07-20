@@ -1,9 +1,9 @@
 // Web Worker for distributed molecular screening & AI Inference via WebLLM
 // 
 // Molecule Screening:
-//   Uses ChemBERTa-77M-MTR (via Transformers.js) to embed SMILES strings
-//   and score them by cosine similarity to reference antibiotics.
-//   Each node does real ML inference — the work is genuinely distributed
+//   Uses Webina (AutoDock Vina WebAssembly) to perform real physical molecular
+//   docking to estimate binding affinity against a target protein.
+//   Each node performs compute locally — the work is genuinely distributed
 //   across multiple browser tabs.
 //
 // AI Inference:
@@ -57,12 +57,12 @@ self.onmessage = async function (e) {
 
   // ── MOLECULE SCREENING — Webina Docking ─────────────
   if (type === 'molecule_batch') {
-    const { taskId, batchId, molecules, modelVersion } = data;
+    const { taskId, batchId, molecules, modelVersion, exhaustiveness, isConfirmPass } = data;
 
     const startTime = Date.now();
 
     // Score the batch — each molecule gets docked via Webina
-    const results = await scoreMoleculeBatch(molecules);
+    const results = await scoreMoleculeBatch(molecules, exhaustiveness || 1);
 
     const computeMs = Date.now() - startTime;
 
@@ -73,6 +73,7 @@ self.onmessage = async function (e) {
       results,
       computeMs,
       modelVersion: modelVersion || 'v1',
+      isConfirmPass: !!isConfirmPass
     });
     return;
   }

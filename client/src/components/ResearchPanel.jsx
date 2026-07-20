@@ -8,6 +8,21 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
     window.open(`${SERVER_URL}/api/screening/export`, '_blank');
   };
 
+  let totalProcessed = 0;
+  let verifiedPct = 0;
+  let disagreedPct = 0;
+  let noDataPct = 0;
+  
+  if (screeningProgress?.stats) {
+    const { passed, failedDisagreement, failedNoRealData } = screeningProgress.stats;
+    totalProcessed = passed + failedDisagreement + failedNoRealData;
+    if (totalProcessed > 0) {
+      verifiedPct = Math.round((passed / totalProcessed) * 100);
+      disagreedPct = Math.round((failedDisagreement / totalProcessed) * 100);
+      noDataPct = Math.round((failedNoRealData / totalProcessed) * 100);
+    }
+  }
+
   return (
     <div className="research-panel">
       <div className="research-header">
@@ -40,6 +55,11 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
               style={{ width: `${screeningProgress.percentComplete || 0}%` }}
             />
           </div>
+          {screeningProgress.stats && totalProcessed > 0 && (
+            <div className="provenance-stats" style={{ marginTop: '8px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              <em>Provenance: {verifiedPct}% consensus-verified · {disagreedPct}% requeued (disagreement) · {noDataPct}% requeued (no real docking available).</em>
+            </div>
+          )}
         </div>
       )}
 
@@ -59,7 +79,8 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
               <tr>
                 <th>Rank</th>
                 <th>SMILES</th>
-                <th>Binding Affinity</th>
+                <th>Triage Affinity</th>
+                <th>Confirmed Score</th>
                 <th>Target</th>
               </tr>
             </thead>
@@ -73,12 +94,21 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
                     </div>
                   </td>
                   <td>{(mol.affinity ?? mol.binding_affinity_kcal_mol)?.toFixed(2) ?? '-'} kcal/mol</td>
+                  <td>
+                    {mol.confirmedAffinity != null ? (
+                      <span className="confirmed-badge" style={{ color: '#4ade80', fontWeight: 'bold' }}>
+                        ✓ {mol.confirmedAffinity.toFixed(2)} kcal/mol
+                      </span>
+                    ) : (
+                      <span className="pending-badge" style={{ color: 'var(--text-muted)' }}>Pending...</span>
+                    )}
+                  </td>
                   <td>1PWC</td>
                 </tr>
               ))}
               {topMolecules.length === 0 && (
                 <tr>
-                  <td colSpan="4">No molecules docked yet — waiting for nodes to submit results...</td>
+                  <td colSpan="5">No molecules docked yet — waiting for nodes to submit results...</td>
                 </tr>
               )}
             </tbody>

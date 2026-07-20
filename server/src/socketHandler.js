@@ -12,6 +12,7 @@ const {
   MOLECULE_BATCH_SIZE, TASK_TYPES, TROPHY_WIN, TROPHY_LOSS,
   DECK_SIZE, CREDITS_PER_CRYSTAL, LLM_LAYERS,
   CONSENSUS_K, SCREENING_CHUNK_SIZE, CREDIT_BASE_RATE,
+  MIN_COMPUTE_MS_PER_MOLECULE
 } = require('../../shared/constants');
 const { CARD_MAP } = require('../../shared/cards');
 const { getTokenizer } = require('./tokenizer');
@@ -25,7 +26,7 @@ const path = require('path');
 
 // ── constants ────────────────────────────────────────────────────────────────
 
-const BASE_TIMEOUT_MS = 60_000;          // longer timeout for ChemBERTa inference
+const BASE_TIMEOUT_MS = 60_000;          // longer timeout for fallback inference
 const MAX_CHUNK_RETRIES = 3;
 const DEADLINE_SCAN_INTERVAL_MS = 5_000;
 
@@ -249,9 +250,6 @@ function getFastestIdleNode(customIds = null) {
 
 // ── molecule screening lifecycle ─────────────────────────────────────────────
 
-/**
- * Load molecule library from disk. No server-side scoring — that happens on nodes.
- */
 function loadScreeningData() {
   const libPath = path.join(__dirname, '..', 'data', 'molecule_library.json');
 
@@ -262,6 +260,34 @@ function loadScreeningData() {
   } catch (err) {
     console.error('[screening] Failed to load molecule_library.json:', err.message);
     moleculeLibrary = [];
+  }
+}
+
+async function loadPersistedLeaderboard() {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('molecule_scores')
+        .select('smiles, binding_affinity_kcal_mol, target_id')
+        .order('binding_affinity_kcal_mol', { ascending: true })
+        .limit(TOP_MOLECULES_LIMIT);
+        
+      if (error) throw error;
+      if (data && data.length > 0) {
+        topMolecules = data.map(r => ({
+          smiles: r.smiles,
+          affinity: r.binding_affinity_kcal_mol,
+          source: 'real',
+          // Note: we don't have confirm states in Supabase initially, 
+          // but we will hydrate what we have.
+        }));
+        console.log(`[leaderboard] Restored ${topMolecules.length} top molecules from Supabase`);
+      }
+    } catch (err) {
+      console.error('[leaderboard] Failed to restore from Supabase:', err.message);
+    }
+  } else {
+    console.warn('[leaderboard] Supabase not configured. Leaderboard will reset on restart.');
   }
 }
 
@@ -323,6 +349,8 @@ function dispatchChunk(io, chunk, socketId) {
     batchId: chunk.chunkId,
     molecules: chunk.molecules,
     modelVersion: getModelVersion(),
+    exhaustiveness: chunk.exhaustiveness,
+    isConfirmPass: chunk.isConfirmPass
   });
 
   console.log(
@@ -360,28 +388,52 @@ function checkRunComplete(io) {
 
 // ── molecule leaderboard (consensus-verified only) ───────────────────────────
 
-async function updateMoleculeLeaderboard(chunkScores) {
+async function updateMoleculeLeaderboard(chunkScores, isConfirmPass) {
   let added = 0;
   for (const mol of chunkScores) {
     if (mol == null || typeof mol.affinity !== 'number') continue;
 
     const existingIdx = topMolecules.findIndex(m => m.smiles === mol.smiles);
     if (existingIdx >= 0) {
-      if (mol.affinity < topMolecules[existingIdx].affinity) {
-        topMolecules[existingIdx] = { ...mol };
+      if (isConfirmPass) {
+        topMolecules[existingIdx].confirmedAffinity = mol.affinity;
+        topMolecules[existingIdx].confirmedAt = new Date().toISOString();
+      } else if (mol.affinity < topMolecules[existingIdx].affinity) {
+        topMolecules[existingIdx].affinity = mol.affinity;
       }
     } else {
-      topMolecules.push({ ...mol });
-      added++;
+      if (!isConfirmPass) {
+        topMolecules.push({ ...mol, confirmedAffinity: null, confirmedAt: null });
+        added++;
+      }
     }
   }
 
-  topMolecules.sort((a, b) => a.affinity - b.affinity);
+  // Sort by confirmed affinity if available, else triage affinity
+  topMolecules.sort((a, b) => {
+    const scoreA = a.confirmedAffinity ?? a.affinity;
+    const scoreB = b.confirmedAffinity ?? b.affinity;
+    return scoreA - scoreB;
+  });
+  
   topMolecules = topMolecules.slice(0, TOP_MOLECULES_LIMIT);
 
-  if (added > 0) {
+  // Queue CONFIRM_RESCORE for top 50 if they don't have it
+  for (let i = 0; i < Math.min(topMolecules.length, 50); i++) {
+    const m = topMolecules[i];
+    if (m.confirmedAffinity == null) {
+      // Find full molecule data to queue
+      const libMol = moleculeLibrary.find(x => x.smiles === m.smiles);
+      if (libMol) {
+        chunkManager.queueConfirmChunk(libMol);
+      }
+    }
+  }
+
+  if (added > 0 || isConfirmPass) {
+    const topScore = topMolecules[0]?.confirmedAffinity ?? topMolecules[0]?.affinity;
     console.log(
-      `[leaderboard] +${added} new molecules. Top: ${topMolecules[0]?.affinity?.toFixed(4) || 'N/A'} kcal/mol (${topMolecules[0]?.smiles?.slice(0, 30) || 'N/A'})`
+      `[leaderboard] Updated molecules. Top: ${topScore?.toFixed(4) || 'N/A'} kcal/mol (${topMolecules[0]?.smiles?.slice(0, 30) || 'N/A'})`
     );
   }
 
@@ -505,6 +557,7 @@ function resetStallTimer(sessionId, stageIndex, io) {
 function setupSocketHandler(io) {
   // ── Load screening data at startup (no server-side scoring!) ──
   loadScreeningData();
+  loadPersistedLeaderboard();
   loadModelConfig();
 
   io.on('connection', (socket) => {
@@ -718,6 +771,18 @@ function setupSocketHandler(io) {
           }
         }
         
+        if (smilesMap.size === 0) {
+          console.warn(`[consensus] ${batchId}: no real results from any of the ${CONSENSUS_K} nodes — requeuing, no credit awarded.`);
+          chunkManager.stats.failedNoRealData++;
+          chunk.assignedNodes.clear();
+          chunk.results = [];
+          chunk.status = 'unassigned';
+          chunkManager.unassignedQueue.push(batchId);
+          chunkManager.completedChunks--;
+          emitScreeningProgress(io);
+          return;
+        }
+        
         for (const [smiles, affinities] of smilesMap) {
           if (affinities.length < CONSENSUS_K) {
             consensusPassed = false; // Some nodes didn't return this molecule
@@ -734,6 +799,7 @@ function setupSocketHandler(io) {
         
         if (consensusPassed) {
           console.log(`[result] ✓ ${batchId} PASSED consensus with ${CONSENSUS_K} nodes`);
+          chunkManager.stats.passed++;
           
           // Use the average affinity from the payload of the first node as representative
           const representativeResults = chunk.results[0].payload.map(res => {
@@ -742,7 +808,7 @@ function setupSocketHandler(io) {
             return { smiles: res.smiles, affinity: avg, source: res.source };
           });
           
-          updateMoleculeLeaderboard(representativeResults).catch(err => {
+          updateMoleculeLeaderboard(representativeResults, chunk.isConfirmPass).catch(err => {
             console.error('[leaderboard] Update error:', err);
           });
           
@@ -763,6 +829,7 @@ function setupSocketHandler(io) {
           }
         } else {
           console.warn(`[result] ✗ ${batchId} FAILED consensus. Requeuing chunk.`);
+          chunkManager.stats.failedDisagreement++;
           // Drop all assignments for this chunk so it can be picked up again
           chunk.assignedNodes.clear();
           chunk.results = [];
@@ -1442,10 +1509,54 @@ function getScreeningProgress() {
   };
 }
 
+function getControlsCheck() {
+  const allControls = moleculeLibrary.filter(m => m.name && m.name.includes('(Control)'));
+  const controlSmiles = new Set(allControls.map(m => m.smiles));
+
+  const decoys = topMolecules.filter(m => !controlSmiles.has(m.smiles));
+  const controlsFound = topMolecules.filter(m => controlSmiles.has(m.smiles));
+
+  let decoyMedian = 0;
+  let decoyMean = 0;
+  if (decoys.length > 0) {
+    const sum = decoys.reduce((acc, m) => acc + (m.affinity || 0), 0);
+    decoyMean = sum / decoys.length;
+    const sorted = [...decoys].map(m => m.affinity || 0).sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    decoyMedian = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
+  }
+
+  const results = controlsFound.map(m => {
+    const rank = topMolecules.findIndex(x => x.smiles === m.smiles) + 1;
+    let verdict = 'FAIL: Control ranks below median';
+    if (decoyMedian !== 0) {
+      if (m.affinity < decoyMedian) {
+        verdict = 'PASS: Control binds better than median decoy';
+      }
+    }
+    const libEntry = allControls.find(x => x.smiles === m.smiles);
+    return {
+      name: libEntry ? libEntry.name : 'Unknown Control',
+      smiles: m.smiles,
+      rank,
+      affinity: m.affinity || 0,
+      verdict
+    };
+  });
+
+  return {
+    totalScored: topMolecules.length,
+    decoyMedian,
+    decoyMean,
+    controls: results
+  };
+}
+
 module.exports = {
   setupSocketHandler,
   getLeaderboard,
   getForgemasterLeaderboard,
   getMoleculeLeaderboard,
   getScreeningProgress,
+  getControlsCheck,
 };

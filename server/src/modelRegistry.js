@@ -1,8 +1,7 @@
 /**
  * server/src/modelRegistry.js — Tracks active model version
  *
- * For Webina docking, we don't have ChemBERTa model configs or reference embeddings,
- * but we still provide basic versioning info.
+ * For Webina docking, we just define the version.
  */
 
 function loadModelConfig() {

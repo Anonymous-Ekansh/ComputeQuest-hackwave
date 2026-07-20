@@ -55,7 +55,7 @@ For the technical folks:
 |---|---|
 | **Server** | Node.js, Express, Socket.io |
 | **Client** | React, Vite |
-| **Compute** | Web Workers API, Transformers.js (ChemBERTa), WebLLM, WebGPU |
+| **Compute** | Web Workers API, Webina (AutoDock Vina), WebLLM, WebGPU |
 | **Database** | Supabase (PostgreSQL) |
 | **Auth** | Google OAuth (JWT) |
 

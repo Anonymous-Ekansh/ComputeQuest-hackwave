@@ -76,7 +76,7 @@ function parseAffinity(outPdbqt) {
   return null;
 }
 
-export async function scoreMoleculeBatch(molecules) {
+export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
   const mod = await initWebina();
   const rec = await getReceptor();
   const box = await getBoxConfig();
@@ -102,7 +102,7 @@ export async function scoreMoleculeBatch(molecules) {
           '--center_x', String(box.center_x), '--center_y', String(box.center_y), '--center_z', String(box.center_z),
           '--size_x', String(box.size_x), '--size_y', String(box.size_y), '--size_z', String(box.size_z),
           '--cpu', '1',
-          '--exhaustiveness', '1', // extremely fast for browser
+          '--exhaustiveness', String(exhaustiveness),
           '--out', 'out.pdbqt'
         ]);
         
