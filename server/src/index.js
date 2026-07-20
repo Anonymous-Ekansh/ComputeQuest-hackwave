@@ -72,20 +72,19 @@ app.get('/api/screening/export', (req, res) => {
     const progress = getScreeningProgress();
 
     // Build CSV
-    const header = 'rank,smiles,similarity_score,agreement_count,model_version\n';
+    const header = 'rank,smiles,binding_affinity,model_version\n';
     const rows = topMolecules.map((mol, idx) =>
-      `${idx + 1},"${mol.smiles}",${mol.similarity?.toFixed(4) || 'N/A'},${mol.agreementCount || 0},${mol.modelVersion || 'v1'}`
+      `${idx + 1},"${mol.smiles}",${mol.affinity?.toFixed(2) || 'N/A'},${mol.modelVersion || 'Webina-1.0'}`
     ).join('\n');
 
     const date = new Date().toISOString().slice(0, 10);
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="computequest_candidates_${date}.csv"`);
+    res.setHeader('Content-Disposition', `attachment; filename="computequest_docking_results_${date}.csv"`);
     res.send(
-      `# ComputeQuest Distributed Screening Results\n` +
+      `# ComputeQuest Distributed Webina Docking Results\n` +
       `# Date: ${new Date().toISOString()}\n` +
+      `# Target: 1PWC (Penicillin-Binding Protein)\n` +
       `# Molecules screened: ${progress.moleculesVerified} / ${progress.totalMolecules}\n` +
-      `# Consensus: k=${3} redundancy, verified by independent nodes\n` +
-      `# Scoring: ChemBERTa-77M-MTR cosine similarity to reference antibiotics\n` +
       `#\n` +
       header + rows
     );

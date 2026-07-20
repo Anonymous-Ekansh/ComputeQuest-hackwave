@@ -13,7 +13,7 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
       <div className="research-header">
         <h3>Research Panel: Distributed Drug Screening</h3>
         <p className="explainer">
-          Your browser is running a ChemBERTa ML model to screen candidate molecules by structural similarity to known antibiotics.
+          Your browser is running a real physics-based molecular docking simulation (Webina/AutoDock Vina) to estimate binding affinity against a Penicillin-Binding Protein (1PWC).
         </p>
       </div>
 
@@ -23,22 +23,16 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
           <div className="stat-row">
             <span className="stat-item">
               <strong>{screeningProgress.moleculesVerified || 0}</strong>
-              <small> / {screeningProgress.totalMolecules || 0} molecules verified</small>
+              <small> / {screeningProgress.totalMolecules || 0} molecules docked</small>
             </span>
             <span className="stat-item">
               <strong>{screeningProgress.completedChunks || 0}</strong>
-              <small> / {screeningProgress.totalChunks || 0} chunks consensus-complete</small>
+              <small> / {screeningProgress.totalChunks || 0} chunks complete</small>
             </span>
             <span className="stat-item">
               <strong>{screeningProgress.inFlight || 0}</strong>
               <small> chunks in flight</small>
             </span>
-            {screeningProgress.totalVerifiedComputeSeconds > 0 && (
-              <span className="stat-item">
-                <strong>{screeningProgress.totalVerifiedComputeSeconds.toLocaleString()}s</strong>
-                <small> verified compute</small>
-              </span>
-            )}
           </div>
           <div className="progress-track" style={{ marginTop: '8px' }}>
             <div
@@ -52,7 +46,7 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
       {/* Top Candidates */}
       <div className="research-leaderboard">
         <div className="leaderboard-header">
-          <h4>Top Candidates (Consensus-Verified)</h4>
+          <h4>Top Candidates (Best Binding Affinity)</h4>
           {topMolecules.length > 0 && (
             <button className="export-btn" onClick={handleExportCSV}>
               Export CSV
@@ -65,9 +59,8 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
               <tr>
                 <th>Rank</th>
                 <th>SMILES</th>
-                <th>Similarity</th>
-                <th>Closest Ref</th>
-                <th>Agreed</th>
+                <th>Binding Affinity</th>
+                <th>Target</th>
               </tr>
             </thead>
             <tbody>
@@ -79,14 +72,13 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
                       {mol.smiles.length > 35 ? mol.smiles.slice(0, 35) + '…' : mol.smiles}
                     </div>
                   </td>
-                  <td>{(mol.similarity ?? mol.composite_score)?.toFixed(4) ?? '-'}</td>
-                  <td>{mol.closestRef || '-'}</td>
-                  <td>{mol.agreementCount || '-'} nodes</td>
+                  <td>{(mol.affinity ?? mol.binding_affinity_kcal_mol)?.toFixed(2) ?? '-'} kcal/mol</td>
+                  <td>1PWC</td>
                 </tr>
               ))}
               {topMolecules.length === 0 && (
                 <tr>
-                  <td colSpan="5">No consensus-verified molecules yet — waiting for nodes to agree...</td>
+                  <td colSpan="4">No molecules docked yet — waiting for nodes to submit results...</td>
                 </tr>
               )}
             </tbody>

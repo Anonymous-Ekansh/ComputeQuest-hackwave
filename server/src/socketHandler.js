@@ -16,7 +16,6 @@ const {
 const { CARD_MAP } = require('../../shared/cards');
 const { getTokenizer } = require('./tokenizer');
 const { ChunkManager, planStages } = require('./taskQueue');
-const { checkConsensus, isTimingPlausible, updateReputation, getReputationMultiplier } = require('./consensus');
 const { loadModelConfig, getModelInfo, getModelVersion, getReferenceAntibiotics } = require('./modelRegistry');
 const { getBotTier } = require('../../shared/bots');
 const { simulateBattle } = require('../../shared/battleLogic');
@@ -363,51 +362,40 @@ function checkRunComplete(io) {
 
 // ── molecule leaderboard (consensus-verified only) ───────────────────────────
 
-async function updateMoleculeLeaderboard(consensusScores, agreedNodeIds) {
+async function updateMoleculeLeaderboard(chunkScores) {
   let added = 0;
-  for (const mol of consensusScores) {
-    if (mol == null || typeof mol.similarity !== 'number') continue;
+  for (const mol of chunkScores) {
+    if (mol == null || typeof mol.affinity !== 'number') continue;
 
     const existingIdx = topMolecules.findIndex(m => m.smiles === mol.smiles);
     if (existingIdx >= 0) {
-      if (mol.similarity > topMolecules[existingIdx].similarity) {
-        topMolecules[existingIdx] = {
-          ...mol,
-          agreementCount: mol.agreementCount,
-          modelVersion: getModelVersion(),
-        };
+      if (mol.affinity < topMolecules[existingIdx].affinity) {
+        topMolecules[existingIdx] = { ...mol };
       }
     } else {
-      topMolecules.push({
-        ...mol,
-        agreementCount: mol.agreementCount,
-        modelVersion: getModelVersion(),
-      });
+      topMolecules.push({ ...mol });
       added++;
     }
   }
 
-  topMolecules.sort((a, b) => b.similarity - a.similarity);
+  topMolecules.sort((a, b) => a.affinity - b.affinity);
   topMolecules = topMolecules.slice(0, TOP_MOLECULES_LIMIT);
 
   if (added > 0) {
     console.log(
-      `[leaderboard] +${added} new molecules. Top: ${topMolecules[0]?.similarity?.toFixed(4) || 'N/A'} (${topMolecules[0]?.smiles?.slice(0, 30) || 'N/A'})`
+      `[leaderboard] +${added} new molecules. Top: ${topMolecules[0]?.affinity?.toFixed(4) || 'N/A'} kcal/mol (${topMolecules[0]?.smiles?.slice(0, 30) || 'N/A'})`
     );
   }
 
   // Persist to Supabase
-  if (supabase && consensusScores.length > 0) {
+  if (supabase && chunkScores.length > 0) {
     try {
-      const rows = consensusScores
-        .filter(m => m != null && typeof m.similarity === 'number')
+      const rows = chunkScores
+        .filter(m => m != null && typeof m.affinity === 'number')
         .map(m => ({
           smiles: m.smiles,
-          consensus_score: m.similarity,
-          predicted_probability: m.similarity,
-          agreement_count: m.agreementCount,
-          model_version: getModelVersion(),
-          composite_score: m.similarity, // backward compat
+          binding_affinity_kcal_mol: m.affinity,
+          target_id: '1pwc',
         }));
 
       if (rows.length > 0) {
@@ -430,64 +418,35 @@ async function updateMoleculeLeaderboard(consensusScores, agreedNodeIds) {
 
 // ── consensus-gated credit awarding ──────────────────────────────────────────
 
-async function awardConsensusCredits(chunkId, agreedNodeIds, disagreedNodeIds, chunkSize, totalComputeMs) {
-  for (const userId of agreedNodeIds) {
-    if (!userId || userId === 'anonymous') continue;
+async function awardCredits(userId, chunkId, chunkSize, computeMs) {
+  if (!userId || userId === 'anonymous') return;
 
-    const repMultiplier = await getReputationMultiplier(supabase, userId);
-    const computeSeconds = (totalComputeMs / 1000) / agreedNodeIds.length;
-    const credits = Math.max(1, Math.round(
-      CREDIT_BASE_RATE * chunkSize * repMultiplier
-    ));
+  const credits = Math.max(1, Math.round(CREDIT_BASE_RATE * chunkSize));
 
-    try {
-      const updatedTotals = await incrementUserCredits(userId, credits);
+  try {
+    const updatedTotals = await incrementUserCredits(userId, credits);
 
-      // Find the node's socket and update in-memory
-      for (const [socketId, node] of nodes) {
-        if (node.userId === userId) {
-          node.credits = updatedTotals?.credits || (node.credits + credits);
-          node.tasksCompleted++;
-          break;
-        }
+    for (const [socketId, node] of nodes) {
+      if (node.userId === userId) {
+        node.credits = updatedTotals?.credits || (node.credits + credits);
+        node.tasksCompleted++;
+        break;
       }
-
-      // Record credit event audit trail
-      if (supabase) {
-        await supabase.from('credit_events').insert({
-          user_id: userId,
-          chunk_id: chunkId,
-          credits_awarded: credits,
-          model_version: getModelVersion(),
-          agreement_details: { agreedNodeIds, disagreedNodeIds },
-          compute_seconds: computeSeconds,
-          reputation_multiplier: repMultiplier,
-        }).catch(() => {}); // non-critical
-      }
-
-      console.log(
-        `[credits] Awarded ${credits}cr to ${userId} for ${chunkId} ` +
-        `(rep: ${repMultiplier.toFixed(2)}, compute: ${computeSeconds.toFixed(1)}s)`
-      );
-    } catch (err) {
-      console.error(`[credits] Failed to award credits to ${userId}:`, err.message);
     }
-  }
 
-  // Update reputation for all participating nodes
-  for (const userId of agreedNodeIds) {
-    if (userId && userId !== 'anonymous') {
-      updateReputation(supabase, userId, true).catch(() => {});
+    if (supabase) {
+      await supabase.from('credit_events').insert({
+        user_id: userId,
+        chunk_id: chunkId,
+        credits_awarded: credits,
+        compute_seconds: computeMs / 1000,
+      }).catch(() => {});
     }
-  }
-  for (const userId of disagreedNodeIds) {
-    if (userId && userId !== 'anonymous') {
-      updateReputation(supabase, userId, false).catch(() => {});
-    }
-  }
 
-  // Track total verified compute
-  totalVerifiedComputeSeconds += (totalComputeMs / 1000);
+    console.log(`[credits] Awarded ${credits}cr to ${userId} for ${chunkId}`);
+  } catch (err) {
+    console.error(`[credits] Failed to award credits to ${userId}:`, err.message);
+  }
 }
 
 // ── pipeline helpers ──────────────────────────────────────────────────────────
@@ -702,7 +661,7 @@ function setupSocketHandler(io) {
       io.emit('node_count', nodes.size);
     })();
 
-    // ── handle molecule batch results — CONSENSUS GATED ──────────────────
+    // ── handle molecule batch results ──────────────────
     socket.on('molecule_batch_result', async (data) => {
       try {
         if (!data || typeof data.batchId !== 'string' || !Array.isArray(data.results)) {
@@ -711,18 +670,9 @@ function setupSocketHandler(io) {
           return;
         }
 
-        const { batchId, results, computeMs, modelVersion } = data;
+        const { batchId, results, computeMs } = data;
         const node = nodes.get(socket.id);
 
-        // ── timing sanity check ──
-        const timingCheck = isTimingPlausible(computeMs || 0, results.length);
-        if (!timingCheck.plausible) {
-          console.warn(`[result] REJECTED from ${socket.id}: ${timingCheck.reason}`);
-          markIdle(socket.id, io);
-          return;
-        }
-
-        // ── update performance map ──
         const elapsed = computeMs || 0;
         const prev = nodePerformance.get(socket.id);
         if (prev) {
@@ -732,35 +682,10 @@ function setupSocketHandler(io) {
           nodePerformance.set(socket.id, { avgMsPerBatch: elapsed, samples: 1 });
         }
 
-        // ── record result in chunk manager (does NOT award credits yet) ──
-        const recordStatus = chunkManager.recordResult(
-          batchId,
-          socket.id,
-          node?.userId,
-          results,
-          elapsed,
-          modelVersion || getModelVersion()
-        );
-
-        // Node is now idle
+        const recordStatus = chunkManager.recordResult(batchId, socket.id);
         markIdle(socket.id, io);
 
         if (recordStatus === 'ignored') return;
-
-        if (recordStatus === 'ready_for_consensus') {
-          // ── Run consensus check ──
-          const chunk = chunkManager.chunks.get(batchId);
-          if (!chunk) return;
-
-          const consensus = checkConsensus(chunk.results);
-
-          if (consensus.passed) {
-            // ✓ Consensus reached!
-            chunkManager.markConsensusReached(batchId);
-
-            console.log(
-              `[consensus] ✓ ${batchId} PASSED: ${consensus.details}`
-            );
 
             // Update leaderboard with consensus-verified scores
             updateMoleculeLeaderboard(consensus.acceptedScores, consensus.agreedNodeIds).catch(err => {
@@ -768,37 +693,48 @@ function setupSocketHandler(io) {
             });
 
             // Award credits to agreeing nodes (consensus-gated!)
-            const totalComputeMs = chunk.results.reduce((sum, r) => sum + r.wallClockMs, 0);
-            awardConsensusCredits(
-              batchId,
-              consensus.agreedNodeIds,
-              consensus.disagreedNodeIds,
-              chunk.molecules.length,
-              totalComputeMs
-            ).catch(err => {
-              console.error('[credits] Award error:', err);
-            });
-
-            // Emit updated user info to all participating nodes
-            for (const [socketId, n] of nodes) {
-              if (consensus.agreedNodeIds.includes(n.userId)) {
-                io.to(socketId).emit('user_info', {
-                  username: n.username,
-                  credits: n.credits,
-                  isAuthenticated: !!n.userId,
-                });
-              }
-            }
-
-          } else if (chunk.results.length >= CONSENSUS_K) {
-            // All k results are in but consensus failed
-            console.warn(`[consensus] ✗ ${batchId} FAILED: ${consensus.details}`);
-            chunkManager.requeueChunk(batchId);
-          }
-          // else: partial results, wait for more
+    // ── handle molecule batch results ──────────────────
+    socket.on('molecule_batch_result', async (data) => {
+      try {
+        if (!data || typeof data.batchId !== 'string' || !Array.isArray(data.results)) {
+          console.warn(`[result] Malformed molecule_batch_result from ${socket.id}`);
+          markIdle(socket.id, io);
+          return;
         }
 
-        // emit progress (only moves when consensus completes)
+        const { batchId, results, computeMs } = data;
+        const node = nodes.get(socket.id);
+
+        const elapsed = computeMs || 0;
+        const prev = nodePerformance.get(socket.id);
+        if (prev) {
+          prev.avgMsPerBatch = prev.avgMsPerBatch * 0.7 + elapsed * 0.3;
+          prev.samples++;
+        } else {
+          nodePerformance.set(socket.id, { avgMsPerBatch: elapsed, samples: 1 });
+        }
+
+        const recordStatus = chunkManager.recordResult(batchId, socket.id);
+        markIdle(socket.id, io);
+
+        if (recordStatus === 'ignored') return;
+
+        console.log(`[result] ✓ ${batchId} PASSED from ${socket.id}`);
+
+        updateMoleculeLeaderboard(results).catch(err => {
+          console.error('[leaderboard] Update error:', err);
+        });
+
+        const chunkSize = results.length;
+        if (node?.userId) {
+          await awardCredits(node.userId, batchId, chunkSize, computeMs || 0);
+          io.to(socket.id).emit('user_info', {
+            username: node.username,
+            credits: node.credits,
+            isAuthenticated: !!node.userId,
+          });
+        }
+        
         emitScreeningProgress(io);
         checkRunComplete(io);
 

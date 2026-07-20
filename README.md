@@ -15,31 +15,27 @@ Here is what happens behind the scenes while you play:
 Our central server has a giant list of potential drug candidates. It chops this list into small chunks and sends a chunk to your browser.
 
 **2. Your browser does the math (Drug Screening).**
-Your browser converts a drug candidate into a list of numbers that describes its shape (using a small AI model called ChemBERTa). It then checks how similar that shape is to known antibiotics — kind of like comparing fingerprints.
+Your browser runs a real physics-based molecular docking simulation using Webina (a WebAssembly port of AutoDock Vina). It takes the 3D shape of a bacterial target (like a Penicillin-Binding Protein) and tries to fit the candidate molecules into its binding pocket, calculating the exact binding affinity in kcal/mol.
 
 **3. Your browser becomes an AI host (Hackwave LLM).**
 While screening drugs, your browser also downloads a powerful AI called TinyLlama using WebLLM technology. When someone asks the ComputeQuest AI a question, the server routes that question to *your* browser. Your graphics card figures out the answer and types it back out in real-time. Because the AI runs on your own hardware, your chats are 100% private and uncensored!
 
-**4. The network double-checks the work.**
-To make sure nobody is faking results to earn free credits, the server sends the exact same drug screening homework to three different people. It only accepts the answers (and pays out credits) if at least two browsers get the exact same result.
-
 ## Project structure
 Wondering how this all fits together? Here's where the magic happens:
-- **`client/`**: The entire React frontend. This includes the UI, the card game (The Forge), and the powerful background Web Workers that actually run the LLM and the ChemBERTa AI directly in your browser.
+- **`client/`**: The entire React frontend. This includes the UI, the card game (The Forge), and the powerful background Web Workers that actually run the LLM and the Webina WASM simulations directly in your browser.
 - **`server/`**: The Node.js backend. Contains `index.js` (for the API) and `socketHandler.js` (which handles user authentication and routes homework chunks/chat messages to connected browsers).
 - **`shared/`**: Contains game logic and constant variables shared by both the client and server.
-- **`scripts/`**: Utility scripts, such as the tools used to convert and prep our AI models before we send them to the browsers.
+- **`scripts/`**: Utility scripts, such as the tools used to convert and prep our drug candidate libraries (PDBQT format) before we send them to the browsers.
 
 ## What am I actually contributing to?
-You are helping screen a massive library of chemical compounds to find ones that share structural similarities with known antibiotics. 
+You are helping screen a massive library of chemical compounds against a real, experimentally-solved 3D structure of an essential bacterial protein. 
 
-> **Important note:** This is a similarity check, not a certified lab test! Finding a match here doesn't prove a molecule cures a disease. Instead, it narrows down a list of millions of random molecules into a highly-ranked shortlist of candidates worth a real scientist's attention in a physical lab.
+> **Important note:** This is a computational estimate (docking), not a certified lab test! Finding a tight binder here doesn't prove a molecule cures a disease. Instead, it narrows down a list of millions of random molecules into a highly-ranked shortlist of candidates worth a real scientist's attention in a physical lab.
 
 ## Features
 - **Browser-Powered LLM:** Chat with a completely private, uncensored Large Language Model running locally on your own GPU via WebLLM. 
-- **Distributed Screening:** Real AI drug screening running entirely in your browser. No downloads or installations required.
-- **Consensus Verification:** The network double-checks answers using multiple browsers before trusting them, ensuring the scientific data is honest and accurate.
-- **Global Leaderboard:** Track which browser nodes have contributed the most verified work, and view the top molecules discovered by the community.
+- **Distributed Screening:** Real physical molecular docking (AutoDock Vina) running entirely in your browser. No downloads or installations required.
+- **Global Leaderboard:** Track which browser nodes have contributed the most verified work, and view the top molecules discovered by the community based on their binding affinity.
 - **The Forge (Card Game):** A full collectible card game built directly into the app to reward you for your compute power.
 
 ## The Forge (the game part)
