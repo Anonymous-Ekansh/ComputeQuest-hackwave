@@ -25,14 +25,24 @@ async function initWebina(forceFresh = false) {
     const getModule = new Function(cleanedText);
     const WebinaFactory = getModule();
     
+    let printHistory = [];
     webinaModule = await WebinaFactory({
       locateFile: (path) => {
         if (path.endsWith('.wasm')) return '/webina.wasm';
         if (path.endsWith('.worker.js')) return '/webina.worker.js';
         return '/' + path;
       },
-      print: (text) => console.log('[Webina] ' + text),
-      printErr: (text) => console.error('[Webina] ' + text)
+      print: (text) => {
+        printHistory.push(text);
+        if (printHistory.length > 10) printHistory.shift();
+        console.log('[Webina] ' + text);
+      },
+      printErr: (text) => {
+        console.error(`[Webina Error | callCount: ${webinaCallCount}] ` + text);
+        if (text.includes('worker sent an error') || text.toLowerCase().includes('crash')) {
+          console.error('[Webina Diagnostics] Last 10 print lines before crash:\n' + printHistory.join('\n'));
+        }
+      }
     });
     webinaCallCount = 0;
     console.log('[DockingWorker] Webina initialized successfully.');

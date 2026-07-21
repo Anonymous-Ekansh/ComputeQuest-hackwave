@@ -298,6 +298,7 @@ function App() {
                 <h3>Sign In to Compute</h3>
                 <div className="auth-row" style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
                   <GoogleLogin
+                    use_fedcm_for_prompt={true}
                     onSuccess={handleGoogleSuccess}
                     onError={() => addLog('Google Login Failed')}
                   />
