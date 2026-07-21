@@ -4,6 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "prebuild": "cp public/webina.js public/vina.1.0.5.js",
+    "predev": "cp public/webina.js public/vina.1.0.5.js",
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
