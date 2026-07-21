@@ -5,13 +5,15 @@ let receptorPdbqt = null;
 let webinaModule = null;
 let webinaInitFailed = false;
 let boxConfig = null;
+let webinaCallCount = 0;
+const MAX_CALLS_BEFORE_RECYCLE = 15; // conservative; tune based on how often garbling appears
 
 // Initialize Webina Module
-async function initWebina() {
-  if (webinaModule) return webinaModule;
+async function initWebina(forceFresh = false) {
+  if (webinaModule && !forceFresh) return webinaModule;
   if (webinaInitFailed) return null; // already tried and failed, don't retry every chunk
 
-  console.log('[DockingWorker] Initializing Webina WASM...');
+  console.log('[DockingWorker] Initializing Webina WASM' + (forceFresh ? ' (recycled)...' : '...'));
   
   try {
     // Dynamically fetch and evaluate to bypass Vercel/Vite strict-mode or dynamic import bugs
@@ -32,8 +34,10 @@ async function initWebina() {
       print: (text) => console.log('[Webina] ' + text),
       printErr: (text) => console.error('[Webina] ' + text)
     });
+    webinaCallCount = 0;
     console.log('[DockingWorker] Webina initialized successfully.');
   } catch (err) {
+    webinaModule = null;
     webinaInitFailed = true;
     console.error('[DockingWorker] Failed to load Webina module (will use fallback scoring for this session):', err);
   }
@@ -116,7 +120,7 @@ function fitsInBox(span, box, marginAngstrom = 6) {
 }
 
 export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
-  const mod = await initWebina();
+  let mod = await initWebina();
   const rec = await getReceptor();
   const box = await getBoxConfig();
   
@@ -126,6 +130,10 @@ export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
     if (!mol || !mol.smiles) {
       results.push(null);
       continue;
+    }
+
+    if (webinaCallCount >= MAX_CALLS_BEFORE_RECYCLE) {
+      mod = await initWebina(true); // force fresh instance before state corrupts further
     }
     
     try {
@@ -147,6 +155,8 @@ export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
           '--exhaustiveness', String(exhaustiveness),
           '--out', 'out.pdbqt'
         ]);
+        
+        webinaCallCount++;
         
         let outData = null;
         try {
