@@ -438,6 +438,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 6px;
+  flex-shrink: 0;
 }
 
 .leaderboard-toggle {
@@ -448,6 +449,7 @@ body {
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 8px;
+  flex-shrink: 0;
 }
 
 .leaderboard-toggle-btn {
@@ -483,7 +485,9 @@ body {
   background: #0d0d14;
   border: 1px solid #1a1a25;
   border-radius: 8px;
-  overflow: hidden;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .leaderboard-loading, .leaderboard-empty {
@@ -590,31 +594,20 @@ body {
 }
 
 /* ── Scrollbar styling ──────────────────────────────────────────────────────── */
-.sidebar::-webkit-scrollbar,
-.research-panel::-webkit-scrollbar,
-.log::-webkit-scrollbar,
-.forge-content::-webkit-scrollbar {
+::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
-.sidebar::-webkit-scrollbar-track,
-.research-panel::-webkit-scrollbar-track,
-.log::-webkit-scrollbar-track,
-.forge-content::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.sidebar::-webkit-scrollbar-thumb,
-.research-panel::-webkit-scrollbar-thumb,
-.log::-webkit-scrollbar-thumb,
-.forge-content::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: #1e293b;
   border-radius: 3px;
 }
 
-.sidebar::-webkit-scrollbar-thumb:hover,
-.research-panel::-webkit-scrollbar-thumb:hover,
-.log::-webkit-scrollbar-thumb:hover,
-.forge-content::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: #334155;
 }
