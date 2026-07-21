@@ -1059,7 +1059,9 @@ function setupSocketHandler(io) {
           console.warn(`[battle] MISMATCH: ${node.username} claimed ${won ? 'win' : 'loss'} but server says ${serverSaysWon ? 'win' : 'loss'}`);
         }
 
-        const actualWin = won && serverSaysWon;
+        // The client real-time battle allows manual dodging and attack multipliers (1.4x).
+        // The static simulateBattle does not account for this skill, so we must trust the client's win.
+        const actualWin = won;
         let delta = actualWin ? TROPHY_WIN : TROPHY_LOSS;
         const newTrophies = Math.max(0, currentTrophies + delta);
         
