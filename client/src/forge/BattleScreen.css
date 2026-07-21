@@ -55,6 +55,75 @@
   color: var(--text-muted) !important;
 }
 
+/* Advantage Diagram */
+.battle-advantage-diagram {
+  margin-top: 30px;
+  text-align: center;
+}
+
+.battle-advantage-diagram h4 {
+  font-family: var(--font-heading);
+  font-size: 0.9rem;
+  color: #aaa;
+  margin-bottom: 20px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.advantage-circle {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  margin: 0 auto;
+}
+
+.adv-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 65px;
+  height: 65px;
+  background: #111;
+  border-radius: 50%;
+  font-size: 0.55rem;
+  font-family: var(--font-heading);
+  text-transform: uppercase;
+  border: 2px solid;
+  z-index: 2;
+}
+
+.adv-node.overclock {
+  top: -15px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #f97316;
+  border-color: #f97316;
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.3);
+}
+
+.adv-node.coolant {
+  bottom: 0;
+  right: -15px;
+  color: #06b6d4;
+  border-color: #06b6d4;
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.3);
+}
+
+.adv-node.firmware {
+  bottom: 0;
+  left: -15px;
+  color: #a855f7;
+  border-color: #a855f7;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.3);
+}
+
+.adv-node .glyph {
+  font-size: 1.2rem;
+  margin-bottom: 2px;
+}
+
 .battle-trophy-display {
   display: flex;
   align-items: center;

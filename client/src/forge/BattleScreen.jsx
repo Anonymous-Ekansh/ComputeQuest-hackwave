@@ -91,7 +91,14 @@ export default function BattleScreen({
     function handleKeyDown(e) {
       const k = e.key.toLowerCase();
       keysRef.current.add(k);
-      if (k === ' ' && !e.repeat) keysRef.current.spacebarJustPressed = true;
+      if (k === ' ' && !e.repeat) {
+        keysRef.current.spacebarJustPressed = true;
+        e.preventDefault();
+      }
+
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+        e.preventDefault();
+      }
 
       if (k >= '1' && k <= '4') {
         const idx = parseInt(k) - 1;
@@ -335,6 +342,36 @@ export default function BattleScreen({
                 <p>WASD: Move</p>
                 <p>Spacebar: Attack</p>
                 <p>1 2 3 4: Switch Character</p>
+              </div>
+              <div className="battle-advantage-diagram">
+                <h4>Element Advantage (+50% DMG)</h4>
+                <div className="advantage-circle">
+                  <svg width="160" height="160" className="advantage-arrows" style={{position: 'absolute', top: 0, left: 0}}>
+                    <defs>
+                      <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#666" />
+                      </marker>
+                    </defs>
+                    {/* OC to Coolant */}
+                    <line x1="100" y1="50" x2="130" y2="100" stroke="#666" strokeWidth="2" markerEnd="url(#arrowhead)" />
+                    {/* Coolant to Firmware */}
+                    <line x1="110" y1="135" x2="50" y2="135" stroke="#666" strokeWidth="2" markerEnd="url(#arrowhead)" />
+                    {/* Firmware to OC */}
+                    <line x1="30" y1="100" x2="60" y2="50" stroke="#666" strokeWidth="2" markerEnd="url(#arrowhead)" />
+                  </svg>
+                  <div className="adv-node overclock">
+                    <span className="glyph">⚡</span>
+                    <span>Overclock</span>
+                  </div>
+                  <div className="adv-node coolant">
+                    <span className="glyph">❄</span>
+                    <span>Coolant</span>
+                  </div>
+                  <div className="adv-node firmware">
+                    <span className="glyph">⚙</span>
+                    <span>Firmware</span>
+                  </div>
+                </div>
               </div>
             </>
           ) : (
