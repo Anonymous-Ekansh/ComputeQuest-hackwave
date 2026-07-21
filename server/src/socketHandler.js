@@ -271,13 +271,13 @@ async function loadPersistedLeaderboard() {
         .order('binding_affinity_kcal_mol', { ascending: true })
         // limit(20000) to ensure we get all data without pagination issues for this dataset size
         .limit(20000);
-        
+
       if (error) throw error;
       if (data && data.length > 0) {
         data.forEach(r => {
           allScoresMap.set(r.smiles, r.binding_affinity_kcal_mol);
         });
-        
+
         topMolecules = data.slice(0, TOP_MOLECULES_LIMIT).map(r => ({
           smiles: r.smiles,
           affinity: r.binding_affinity_kcal_mol,
@@ -394,7 +394,7 @@ async function updateMoleculeLeaderboard(chunkScores, isConfirmPass) {
   let added = 0;
   for (const mol of chunkScores) {
     if (mol == null || typeof mol.affinity !== 'number') continue;
-    
+
     // Update uncapped map
     if (!isConfirmPass || !allScoresMap.has(mol.smiles)) {
       allScoresMap.set(mol.smiles, mol.affinity);
@@ -422,7 +422,7 @@ async function updateMoleculeLeaderboard(chunkScores, isConfirmPass) {
     const scoreB = b.confirmedAffinity ?? b.affinity;
     return scoreA - scoreB;
   });
-  
+
   topMolecules = topMolecules.slice(0, TOP_MOLECULES_LIMIT);
 
   // Queue CONFIRM_RESCORE for top 50 if they don't have it
@@ -497,7 +497,7 @@ async function awardCredits(userId, chunkId, chunkSize, computeMs) {
         chunk_id: chunkId,
         credits_awarded: credits,
         compute_seconds: computeMs / 1000,
-      }).catch(() => {});
+      }).catch(() => { });
     }
 
     console.log(`[credits] Awarded ${credits}cr to ${userId} for ${chunkId}`);
@@ -766,7 +766,7 @@ function setupSocketHandler(io) {
         // We have reached CONSENSUS_K results for this chunk. Verify them.
         const chunk = recordOutcome.chunk;
         let consensusPassed = true;
-        
+
         // chunk.results is an array of { socketId, userId, payload: realResults }
         // Verify that the affinity for each molecule agrees within 0.5 kcal/mol across all nodes
         // First, reorganize by SMILES to compare across nodes easily
@@ -777,7 +777,7 @@ function setupSocketHandler(io) {
             smilesMap.get(res.smiles).push(res.affinity);
           }
         }
-        
+
         if (smilesMap.size === 0) {
           console.warn(`[consensus] ${batchId}: no real results from any of the ${CONSENSUS_K} nodes — requeuing, no credit awarded.`);
           chunkManager.stats.failedNoRealData++;
@@ -789,7 +789,7 @@ function setupSocketHandler(io) {
           emitScreeningProgress(io);
           return;
         }
-        
+
         for (const [smiles, affinities] of smilesMap) {
           if (affinities.length < CONSENSUS_K) {
             consensusPassed = false; // Some nodes didn't return this molecule
@@ -803,27 +803,27 @@ function setupSocketHandler(io) {
             break;
           }
         }
-        
+
         if (consensusPassed) {
           console.log(`[result] ✓ ${batchId} PASSED consensus with ${CONSENSUS_K} nodes`);
           chunkManager.stats.passed++;
-          
+
           // Use the average affinity from the payload of the first node as representative
           const representativeResults = chunk.results[0].payload.map(res => {
             const allAffinities = smilesMap.get(res.smiles);
             const avg = allAffinities.reduce((a, b) => a + b, 0) / allAffinities.length;
             return { smiles: res.smiles, affinity: avg, source: res.source };
           });
-          
+
           updateMoleculeLeaderboard(representativeResults, chunk.isConfirmPass).catch(err => {
             console.error('[leaderboard] Update error:', err);
           });
-          
+
           // Award credits to all participating nodes
           for (const submission of chunk.results) {
             if (submission.userId) {
               await awardCredits(submission.userId, batchId, chunkSize, computeMs || 0);
-              
+
               const nodeSocket = nodes.get(submission.socketId);
               if (nodeSocket) {
                 io.to(submission.socketId).emit('user_info', {
@@ -1236,7 +1236,7 @@ function setupSocketHandler(io) {
         const n = nodes.get(id);
         return n && n.isWarm;
       });
-      
+
       let assignedNodeId;
       if (warmIdleIds.length > 0) {
         assignedNodeId = getFastestIdleNode(warmIdleIds) || warmIdleIds[0];
@@ -1244,7 +1244,7 @@ function setupSocketHandler(io) {
         assignedNodeId = getFastestIdleNode(idleIds) || idleIds[0];
         socket.emit('generation_warning', { warning: 'No warm node available; this reply may take several minutes while a node loads the model for the first time' });
       }
-      
+
       markBusy(assignedNodeId);
 
       let allResponded = true;
@@ -1321,7 +1321,7 @@ function setupSocketHandler(io) {
           let progressTimerMs = 90000;
           let progressTimer = null;
           let outerTimer = null;
-          
+
           const clearTimers = () => {
             if (progressTimer) clearTimeout(progressTimer);
             if (outerTimer) clearTimeout(outerTimer);
@@ -1347,7 +1347,7 @@ function setupSocketHandler(io) {
             clearTimers();
             reject(new Error('Shard loading hit absolute maximum time limit'));
           }, outerTimeoutMs);
-          
+
           targetSocket.on('node_warm_progress', onProgress);
 
           const onStageReady = (data) => {
@@ -1525,7 +1525,7 @@ function getControlsCheck() {
     smiles,
     affinity
   }));
-  
+
   // Sort them ascending (best affinity first) to determine rank
   allScoresArr.sort((a, b) => a.affinity - b.affinity);
 
