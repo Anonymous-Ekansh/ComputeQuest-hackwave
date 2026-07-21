@@ -24,7 +24,7 @@ const CREDITS_PER_UPGRADE = 1000;
 const MAX_UPGRADES_PER_CARD = 10; 
 
 // ── Webina Distributed Screening ─────────────────────────────────────────────────
-const DOCKING_TIMEOUT_MS = 120_000;        // max ms to wait before requeuing a chunk
+const DOCKING_TIMEOUT_MS = 300_000;        // max ms to wait before requeuing a chunk
 const MIN_COMPUTE_MS_PER_MOLECULE = 50;    // timing sanity floor
 const SCREENING_CHUNK_SIZE = 5;            // molecules per chunk (Webina is slow)
 const CREDIT_BASE_RATE = 5;                // base credits per molecule in a chunk
