@@ -1,6 +1,19 @@
 // dockingWorker.js
 // Runs Webina (AutoDock Vina WebAssembly) for real molecular docking
 
+self.onerror = function(message, source, lineno, colno, error) {
+  let decoded = "Unknown";
+  if (webinaModule && webinaModule.getExceptionMessage && typeof error === 'number') {
+    try { decoded = webinaModule.getExceptionMessage(error); } catch(e){}
+  } else if (webinaModule && webinaModule.getExceptionMessage && error && typeof error.message === 'string' && error.message.includes('Uncaught ')) {
+    const ptr = parseInt(error.message.split('Uncaught ')[1]);
+    if (!isNaN(ptr)) {
+      try { decoded = webinaModule.getExceptionMessage(ptr); } catch(e){}
+    }
+  }
+  console.error(`[DockingWorker] FATAL ASYNC CRASH:`, error, "Decoded:", decoded);
+};
+
 let receptorPdbqt = null;
 let webinaModule = null;
 let webinaInitFailed = false;
@@ -189,16 +202,29 @@ export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
         mod.FS.writeFile('receptor.pdbqt', rec);
         mod.FS.writeFile('ligand.pdbqt', centeredPdbqt);
         
-        // Call Vina main using dynamic bounding box
-        mod.callMain([
-          '--receptor', 'receptor.pdbqt',
-          '--ligand', 'ligand.pdbqt',
-          '--center_x', String(box.center_x), '--center_y', String(box.center_y), '--center_z', String(box.center_z),
-          '--size_x', String(box.size_x), '--size_y', String(box.size_y), '--size_z', String(box.size_z),
-          '--cpu', '1',
-          '--exhaustiveness', String(exhaustiveness),
-          '--out', 'out.pdbqt'
-        ]);
+        // Wait for Vina to finish using onExit
+        await new Promise((resolve, reject) => {
+          mod.onExit = (status) => {
+            if (status === 0) resolve();
+            else reject(new Error("Vina exited with status " + status));
+          };
+          
+          mod.onAbort = (err) => reject(new Error("Vina aborted: " + err));
+          
+          try {
+            mod.callMain([
+              '--receptor', 'receptor.pdbqt',
+              '--ligand', 'ligand.pdbqt',
+              '--center_x', String(box.center_x), '--center_y', String(box.center_y), '--center_z', String(box.center_z),
+              '--size_x', String(box.size_x), '--size_y', String(box.size_y), '--size_z', String(box.size_z),
+              '--cpu', '1',
+              '--exhaustiveness', String(exhaustiveness),
+              '--out', 'out.pdbqt'
+            ]);
+          } catch (e) {
+            reject(e); // in case callMain throws synchronously
+          }
+        });
         
         webinaCallCount++;
         
@@ -206,7 +232,6 @@ export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
         try {
           outData = mod.FS.readFile('out.pdbqt', { encoding: 'utf8' });
         } catch (e) {
-          // If Vina failed to write output (e.g. grid box too small), readFile throws
           console.error(`[DockingWorker] Webina output missing for ${mol.smiles}:`, e);
         }
 
@@ -233,7 +258,15 @@ export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
         });
       }
     } catch (err) {
-      console.error(`[DockingWorker] Webina failed for ${mol.smiles}:`, err);
+      let decodedError = "Unknown C++ exception";
+      if (typeof err === 'number' && mod && mod.getExceptionMessage) {
+        try { decodedError = mod.getExceptionMessage(err); } catch(e){}
+      }
+      console.error(`[DockingWorker] Webina failed for ${mol.smiles}:`, err, decodedError);
+      
+      // Force recycle on the next iteration because the module is likely in a dead/corrupted state
+      webinaCallCount = MAX_CALLS_BEFORE_RECYCLE;
+      
       results.push({
         smiles: mol.smiles,
         affinity: -2.0,
