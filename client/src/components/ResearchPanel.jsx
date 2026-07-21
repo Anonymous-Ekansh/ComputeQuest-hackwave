@@ -8,20 +8,7 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
     window.open(`${SERVER_URL}/api/screening/export`, '_blank');
   };
 
-  let totalProcessed = 0;
-  let verifiedPct = 0;
-  let disagreedPct = 0;
-  let noDataPct = 0;
-  
-  if (screeningProgress?.stats) {
-    const { passed, failedDisagreement, failedNoRealData } = screeningProgress.stats;
-    totalProcessed = passed + failedDisagreement + failedNoRealData;
-    if (totalProcessed > 0) {
-      verifiedPct = Math.round((passed / totalProcessed) * 100);
-      disagreedPct = Math.round((failedDisagreement / totalProcessed) * 100);
-      noDataPct = Math.round((failedNoRealData / totalProcessed) * 100);
-    }
-  }
+
 
   return (
     <div className="research-panel">
@@ -55,11 +42,7 @@ export default function ResearchPanel({ topMolecules, screeningProgress }) {
               style={{ width: `${screeningProgress.percentComplete || 0}%` }}
             />
           </div>
-          {screeningProgress.stats && totalProcessed > 0 && (
-            <div className="provenance-stats" style={{ marginTop: '8px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              <em>Provenance: {verifiedPct}% consensus-verified · {disagreedPct}% requeued (disagreement) · {noDataPct}% requeued (no real docking available).</em>
-            </div>
-          )}
+
         </div>
       )}
 
