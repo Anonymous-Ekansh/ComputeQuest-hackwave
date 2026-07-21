@@ -39,14 +39,18 @@ function App() {
   const [authToken, setAuthToken] = useState(localStorage.getItem('cq_auth_token') || null);
 
   useEffect(() => {
-    // Check if we were redirected back from Google auth callback
-    const params = new URLSearchParams(window.location.search);
-    const tokenFromUrl = params.get('token');
-    if (tokenFromUrl) {
-      setAuthToken(tokenFromUrl);
-      localStorage.setItem('cq_auth_token', tokenFromUrl);
-      // Clean up URL
-      window.history.replaceState({}, document.title, window.location.pathname);
+    // Check if we were redirected back from Google auth callback via localStorage temp
+    const tempToken = localStorage.getItem('cq_auth_token_temp');
+    if (tempToken) {
+      setAuthToken(tempToken);
+      localStorage.setItem('cq_auth_token', tempToken);
+      localStorage.removeItem('cq_auth_token_temp');
+      
+      // If the socket was already initialized anonymously, reconnect it
+      if (socketRef.current) {
+        socketRef.current.auth = { token: tempToken };
+        socketRef.current.disconnect().connect();
+      }
     }
   }, []);
   // Progress states

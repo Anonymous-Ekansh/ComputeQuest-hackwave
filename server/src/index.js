@@ -27,7 +27,19 @@ app.use(express.urlencoded({ extended: true })); // for Google callback
 
 app.post('/api/auth/callback', (req, res) => {
   const { credential } = req.body;
-  res.redirect(`${clientOrigin}/?token=${credential}`);
+  res.setHeader('Content-Type', 'text/html');
+  res.status(200).send(`
+    <!DOCTYPE html>
+    <html>
+    <head><title>Logging in...</title></head>
+    <body>
+      <script>
+        localStorage.setItem('cq_auth_token_temp', '${credential}');
+        window.location.href = '/';
+      </script>
+    </body>
+    </html>
+  `);
 });
 
 // health check
