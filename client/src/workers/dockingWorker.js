@@ -3,11 +3,14 @@
 
 let receptorPdbqt = null;
 let webinaModule = null;
+let webinaInitFailed = false;
 let boxConfig = null;
 
 // Initialize Webina Module
 async function initWebina() {
   if (webinaModule) return webinaModule;
+  if (webinaInitFailed) return null; // already tried and failed, don't retry every chunk
+
   console.log('[DockingWorker] Initializing Webina WASM...');
   
   try {
@@ -31,7 +34,8 @@ async function initWebina() {
     });
     console.log('[DockingWorker] Webina initialized successfully.');
   } catch (err) {
-    console.error('[DockingWorker] Failed to load Webina module:', err);
+    webinaInitFailed = true;
+    console.error('[DockingWorker] Failed to load Webina module (will use fallback scoring for this session):', err);
   }
   return webinaModule;
 }
