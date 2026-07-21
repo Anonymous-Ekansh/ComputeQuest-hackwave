@@ -6,7 +6,7 @@ let webinaModule = null;
 let webinaInitFailed = false;
 let boxConfig = null;
 let webinaCallCount = 0;
-const MAX_CALLS_BEFORE_RECYCLE = 15; // conservative; tune based on how often garbling appears
+const MAX_CALLS_BEFORE_RECYCLE = 1; // highly aggressive recycle to prevent static state corruption
 
 // Initialize Webina Module
 async function initWebina(forceFresh = false) {
