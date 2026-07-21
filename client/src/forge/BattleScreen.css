@@ -12,6 +12,7 @@
 .battle-screen.battling {
   outline: none;           /* remove focus ring when we capture keys */
   align-items: center;
+  justify-content: center;
   gap: 0;
 }
 
@@ -22,6 +23,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
+  flex: 1;
   gap: 16px;
 }
 

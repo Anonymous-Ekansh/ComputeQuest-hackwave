@@ -21,6 +21,7 @@ function App() {
   // Molecule screening states
   const [screeningProgress, setScreeningProgress] = useState(null);
   const [topMolecules, setTopMolecules] = useState([]);
+  const [isForgeMaximized, setIsForgeMaximized] = useState(false);
 
   const [userInfo, setUserInfo] = useState({
     username: 'Anonymous Node',
@@ -402,8 +403,16 @@ function App() {
 
       {/* ── Middle Column (The Forge + Distributed Screening) ── */}
       <main className="middle-col">
-        <div className="forge-container">
-          <div className="panel-header">[SYS.OP.02] THE FORGE</div>
+        <div className={`forge-container ${isForgeMaximized ? 'maximized' : ''}`}>
+          <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>[SYS.OP.02] THE FORGE</span>
+            <button 
+              onClick={() => setIsForgeMaximized(!isForgeMaximized)}
+              style={{ background: 'transparent', border: '1px solid var(--color-border)', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px 8px', fontSize: '10px', borderRadius: '4px', letterSpacing: '1px' }}
+            >
+              {isForgeMaximized ? 'MINIMIZE' : 'MAXIMIZE'}
+            </button>
+          </div>
           <div style={{ flex: 1, position: 'relative', overflowY: 'auto' }}>
             <TheForge
               socket={socketRef.current}
