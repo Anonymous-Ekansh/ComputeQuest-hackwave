@@ -1060,8 +1060,11 @@ function setupSocketHandler(io) {
         }
 
         const actualWin = won && serverSaysWon;
-        const delta = actualWin ? TROPHY_WIN : TROPHY_LOSS;
+        let delta = actualWin ? TROPHY_WIN : TROPHY_LOSS;
         const newTrophies = Math.max(0, currentTrophies + delta);
+        
+        // Recalculate delta to reflect the actual change (prevents "-1" when starting at 0)
+        delta = newTrophies - currentTrophies;
 
         if (supabase) {
           const { error } = await supabase
