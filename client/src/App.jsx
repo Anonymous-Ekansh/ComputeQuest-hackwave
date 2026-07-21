@@ -38,6 +38,17 @@ function App() {
   
   const [authToken, setAuthToken] = useState(localStorage.getItem('cq_auth_token') || null);
 
+  useEffect(() => {
+    // Check if we were redirected back from Google auth callback
+    const params = new URLSearchParams(window.location.search);
+    const tokenFromUrl = params.get('token');
+    if (tokenFromUrl) {
+      setAuthToken(tokenFromUrl);
+      localStorage.setItem('cq_auth_token', tokenFromUrl);
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
   // Progress states
   const [warmProgress, setWarmProgress] = useState(null);
 
@@ -299,6 +310,8 @@ function App() {
                 <div className="auth-row" style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
                   <GoogleLogin
                     use_fedcm_for_prompt={true}
+                    ux_mode="redirect"
+                    login_uri={`${window.location.origin}/api/auth/callback`}
                     onSuccess={handleGoogleSuccess}
                     onError={() => addLog('Google Login Failed')}
                   />

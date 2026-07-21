@@ -23,6 +23,12 @@ const io = new Server(server, {
 // middleware
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // for Google callback
+
+app.post('/api/auth/callback', (req, res) => {
+  const { credential } = req.body;
+  res.redirect(`${clientOrigin}/?token=${credential}`);
+});
 
 // health check
 app.get('/', (req, res) => {
