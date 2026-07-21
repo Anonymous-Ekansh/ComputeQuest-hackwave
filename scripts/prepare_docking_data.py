@@ -1,6 +1,7 @@
 import json
 import os
 import requests
+import multiprocessing
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from meeko import MoleculePreparation
@@ -75,48 +76,68 @@ def download_and_prepare_receptor():
         f.write(pdbqt_str)
     print(f"Saved receptor to {receptor_path}")
 
+def process_molecule(mol_data):
+    smiles = mol_data.get('smiles')
+    if not smiles:
+        return None
+        
+    mol = Chem.MolFromSmiles(smiles)
+    if not mol:
+        return None
+        
+    mol = Chem.AddHs(mol)
+    try:
+        # Generate 3D conformer
+        if AllChem.EmbedMolecule(mol, randomSeed=42) != 0:
+            return None
+        # Optimize conformer
+        AllChem.MMFFOptimizeMolecule(mol)
+    except Exception:
+        return None
+        
+    try:
+        preparator = MoleculePreparation(merge_these_atom_types=("H",))
+        preparator.prepare(mol)
+        pdbqt_string = preparator.write_pdbqt_string()
+        mol_data['pdbqt'] = pdbqt_string
+        return mol_data
+    except Exception as e:
+        return None
+
 def prepare_ligands():
     print("Loading molecule library...")
     with open(LIB_PATH, 'r') as f:
         data = json.load(f)
         
     molecules = data.get('molecules', [])
-    print(f"Found {len(molecules)} molecules. Converting to 3D PDBQT...")
+    print(f"Found {len(molecules)} molecules. Converting to 3D PDBQT using multiprocessing...")
     
     valid_molecules = []
     
-    for i, mol_data in enumerate(molecules):
-        smiles = mol_data.get('smiles')
-        if not smiles:
-            continue
-            
-        mol = Chem.MolFromSmiles(smiles)
-        if not mol:
-            continue
-            
-        mol = Chem.AddHs(mol)
-        try:
-            # Generate 3D conformer
-            if AllChem.EmbedMolecule(mol, randomSeed=42) != 0:
-                print(f"Failed to embed {smiles}")
-                continue
-            # Optimize conformer
-            AllChem.MMFFOptimizeMolecule(mol)
-        except Exception:
-            continue
-            
-        try:
-            preparator = MoleculePreparation(merge_these_atom_types=("H",))
-            preparator.prepare(mol)
-            pdbqt_string = preparator.write_pdbqt_string()
-            mol_data['pdbqt'] = pdbqt_string
-            valid_molecules.append(mol_data)
-        except Exception as e:
-            print(f"Failed to prepare {smiles}: {e}")
-            continue
-            
-        if (i+1) % 100 == 0:
-            print(f"Processed {i+1}/{len(molecules)}")
+    # We already have some molecules with pdbqt if we didn't want to recompute, 
+    # but the script traditionally recomputes. Let's just process those without pdbqt
+    # or just process all. Let's process those without pdbqt to save massive time.
+    
+    mols_to_process = [m for m in molecules if not m.get('pdbqt')]
+    mols_already_done = [m for m in molecules if m.get('pdbqt')]
+    
+    print(f"{len(mols_already_done)} molecules already have 3D conformers. {len(mols_to_process)} need processing.")
+    
+    if mols_to_process:
+        num_cores = max(1, multiprocessing.cpu_count() - 1)
+        print(f"Using {num_cores} CPU cores...")
+        
+        with multiprocessing.Pool(processes=num_cores) as pool:
+            results = []
+            for i, res in enumerate(pool.imap_unordered(process_molecule, mols_to_process, chunksize=100)):
+                if res is not None:
+                    results.append(res)
+                if (i + 1) % 500 == 0:
+                    print(f"Processed {i + 1}/{len(mols_to_process)} molecules...")
+                    
+        valid_molecules = mols_already_done + results
+    else:
+        valid_molecules = mols_already_done
             
     data['molecules'] = valid_molecules
     
@@ -125,6 +146,6 @@ def prepare_ligands():
         json.dump(data, f, indent=2)
 
 if __name__ == "__main__":
-    download_and_prepare_receptor()
+    # download_and_prepare_receptor()
     prepare_ligands()
     print("Done!")

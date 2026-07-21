@@ -11,9 +11,16 @@ async function initWebina() {
   console.log('[DockingWorker] Initializing Webina WASM...');
   
   try {
-    // Dynamically import the ES module (bypassing Vite analysis)
-    const module = await import(/* @vite-ignore */ '/webina.js');
-    webinaModule = await module.default({
+    // Dynamically fetch and evaluate to bypass Vercel/Vite strict-mode or dynamic import bugs
+    const jsText = await fetch('/webina.js').then(res => res.text());
+    const cleanedText = jsText
+      .replace('export default WEBINA_MODULE;', 'return WEBINA_MODULE;')
+      .replace(/import\.meta\.url/g, `"${self.location.origin}/webina.js"`);
+      
+    const getModule = new Function(cleanedText);
+    const WebinaFactory = getModule();
+    
+    webinaModule = await WebinaFactory({
       locateFile: (path) => {
         if (path.endsWith('.wasm')) return '/webina.wasm';
         if (path.endsWith('.worker.js')) return '/webina.worker.js';
