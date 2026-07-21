@@ -116,7 +116,38 @@ function getLigandSpan(pdbqt) {
     }
   }
   if (minX === Infinity) return null;
-  return { spanX: maxX - minX, spanY: maxY - minY, spanZ: maxZ - minZ };
+  return { 
+    spanX: maxX - minX, spanY: maxY - minY, spanZ: maxZ - minZ,
+    minX, maxX, minY, maxY, minZ, maxZ 
+  };
+}
+
+// Center the ligand inside the Vina search box so Vina doesn't throw out-of-bounds C++ exceptions
+function centerLigandInBox(pdbqt, span, box) {
+  const cx = (span.minX + span.maxX) / 2;
+  const cy = (span.minY + span.maxY) / 2;
+  const cz = (span.minZ + span.maxZ) / 2;
+
+  const dx = box.center_x - cx;
+  const dy = box.center_y - cy;
+  const dz = box.center_z - cz;
+
+  const lines = pdbqt.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+      const x = parseFloat(line.substring(30, 38));
+      const y = parseFloat(line.substring(38, 46));
+      const z = parseFloat(line.substring(46, 54));
+      
+      const newX = (x + dx).toFixed(3).padStart(8, ' ');
+      const newY = (y + dy).toFixed(3).padStart(8, ' ');
+      const newZ = (z + dz).toFixed(3).padStart(8, ' ');
+      
+      lines[i] = line.substring(0, 30) + newX + newY + newZ + line.substring(54);
+    }
+  }
+  return lines.join('\n');
 }
 
 // Vina needs headroom beyond the ligand's raw extent to search rotations/translations.
@@ -151,9 +182,12 @@ export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
       const canDock = span && fitsInBox(span, box);
 
       if (mod && rec && mol.pdbqt && canDock) {
+        // Shift ligand into the center of the grid box to avoid Vina C++ parsing/boundary exceptions
+        const centeredPdbqt = centerLigandInBox(mol.pdbqt, span, box);
+
         // Write files to virtual FS
         mod.FS.writeFile('receptor.pdbqt', rec);
-        mod.FS.writeFile('ligand.pdbqt', mol.pdbqt);
+        mod.FS.writeFile('ligand.pdbqt', centeredPdbqt);
         
         // Call Vina main using dynamic bounding box
         mod.callMain([
