@@ -1059,7 +1059,8 @@ function setupSocketHandler(io) {
           console.warn(`[battle] MISMATCH: ${node.username} claimed ${won ? 'win' : 'loss'} but server says ${serverSaysWon ? 'win' : 'loss'}`);
         }
 
-        const delta = serverSaysWon ? TROPHY_WIN : TROPHY_LOSS;
+        const actualWin = won && serverSaysWon;
+        const delta = actualWin ? TROPHY_WIN : TROPHY_LOSS;
         const newTrophies = Math.max(0, currentTrophies + delta);
 
         if (supabase) {

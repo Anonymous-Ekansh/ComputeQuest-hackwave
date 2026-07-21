@@ -95,9 +95,9 @@ export default function BattleScreen({
 
       if (k >= '1' && k <= '4') {
         const idx = parseInt(k) - 1;
-        const playerFighters = fightersRef.current.filter(f => f.team === 'player' && f.alive);
-        if (idx < playerFighters.length) {
-          const realIdx = fightersRef.current.indexOf(playerFighters[idx]);
+        const allPlayerFighters = fightersRef.current.filter(f => f.team === 'player');
+        if (idx < allPlayerFighters.length && allPlayerFighters[idx].alive) {
+          const realIdx = fightersRef.current.indexOf(allPlayerFighters[idx]);
           setSelectedIdx(realIdx);
         }
       }
@@ -330,6 +330,12 @@ export default function BattleScreen({
               <button className="battle-start-btn" onClick={startBattle}>
                 Find Opponent
               </button>
+              <div className="battle-instructions" style={{ marginTop: '20px', fontSize: '0.9em', color: '#888' }}>
+                <h4>Controls</h4>
+                <p>WASD: Move</p>
+                <p>Spacebar: Attack</p>
+                <p>1 2 3 4: Switch Character</p>
+              </div>
             </>
           ) : (
             <>
