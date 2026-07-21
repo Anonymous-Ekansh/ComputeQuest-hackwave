@@ -267,7 +267,7 @@ async function loadPersistedLeaderboard() {
     try {
       const { data, error } = await supabase
         .from('molecule_scores')
-        .select('smiles, binding_affinity_kcal_mol, target_id')
+        .select('smiles, binding_affinity_kcal_mol, confirmed_affinity_kcal_mol, target_id')
         .order('binding_affinity_kcal_mol', { ascending: true })
         // limit(20000) to ensure we get all data without pagination issues for this dataset size
         .limit(20000);
@@ -281,6 +281,7 @@ async function loadPersistedLeaderboard() {
         topMolecules = data.slice(0, TOP_MOLECULES_LIMIT).map(r => ({
           smiles: r.smiles,
           affinity: r.binding_affinity_kcal_mol,
+          confirmedAffinity: r.confirmed_affinity_kcal_mol ?? null,
           source: 'real',
         }));
         console.log(`[leaderboard] Restored ${topMolecules.length} top molecules and loaded ${allScoresMap.size} scores into memory from Supabase`);
@@ -449,11 +450,15 @@ async function updateMoleculeLeaderboard(chunkScores, isConfirmPass) {
     try {
       const rows = chunkScores
         .filter(m => m != null && typeof m.affinity === 'number')
-        .map(m => ({
-          smiles: m.smiles,
-          binding_affinity_kcal_mol: m.affinity,
-          target_id: '1pwc',
-        }));
+        .map(m => {
+          const topMol = topMolecules.find(x => x.smiles === m.smiles);
+          return {
+            smiles: m.smiles,
+            binding_affinity_kcal_mol: topMol ? topMol.affinity : m.affinity,
+            confirmed_affinity_kcal_mol: topMol ? topMol.confirmedAffinity : null,
+            target_id: '1pwc',
+          };
+        });
 
       if (rows.length > 0) {
         const BATCH_SIZE = 50;
