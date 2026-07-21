@@ -87,6 +87,34 @@ function parseAffinity(outPdbqt) {
   return null;
 }
 
+function getLigandSpan(pdbqt) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (const line of pdbqt.split('\n')) {
+    if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+      const x = parseFloat(line.substring(30, 38));
+      const y = parseFloat(line.substring(38, 46));
+      const z = parseFloat(line.substring(46, 54));
+      if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) continue;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+    }
+  }
+  if (minX === Infinity) return null;
+  return { spanX: maxX - minX, spanY: maxY - minY, spanZ: maxZ - minZ };
+}
+
+// Vina needs headroom beyond the ligand's raw extent to search rotations/translations.
+// A ~6 Å margin per axis is a conservative, commonly-cited rule of thumb.
+function fitsInBox(span, box, marginAngstrom = 6) {
+  return (
+    span.spanX <= box.size_x - marginAngstrom &&
+    span.spanY <= box.size_y - marginAngstrom &&
+    span.spanZ <= box.size_z - marginAngstrom
+  );
+}
+
 export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
   const mod = await initWebina();
   const rec = await getReceptor();
@@ -101,7 +129,10 @@ export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
     }
     
     try {
-      if (mod && rec && mol.pdbqt) {
+      const span = mol.pdbqt ? getLigandSpan(mol.pdbqt) : null;
+      const canDock = span && fitsInBox(span, box);
+
+      if (mod && rec && mol.pdbqt && canDock) {
         // Write files to virtual FS
         mod.FS.writeFile('receptor.pdbqt', rec);
         mod.FS.writeFile('ligand.pdbqt', mol.pdbqt);
@@ -138,10 +169,13 @@ export async function scoreMoleculeBatch(molecules, exhaustiveness = 1) {
         try { mod.FS.unlink('ligand.pdbqt'); } catch(e){}
         try { mod.FS.unlink('out.pdbqt'); } catch(e){}
       } else {
+        if (mol.pdbqt && canDock === false) {
+          console.warn(`[DockingWorker] Skipping ${mol.smiles} — ligand too large for ${box.size_x}Å box`, span);
+        }
         results.push({
           smiles: mol.smiles,
           affinity: -5.0 - (mol.smiles.length % 5),
-          source: 'fallback_missing'
+          source: canDock === false ? 'fallback_too_large' : 'fallback_missing'
         });
       }
     } catch (err) {
