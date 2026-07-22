@@ -1,0 +1,4 @@
+server/models/tokenizer/*.json linguist-generated=true
+server/data/*.json linguist-generated=true
+package-lock.json linguist-generated=true
+client/package-lock.json linguist-generated=true
