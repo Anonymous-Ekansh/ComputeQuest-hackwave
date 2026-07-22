@@ -562,7 +562,7 @@ export default function BattleScreen({
                   </li>
                   <li className="mech-pow">
                     <span className="mech-title">Arena Power-ups</span>
-                    Run over drops to collect them. <strong>♥ Health</strong> restores HP, <strong>⚡ Energy</strong> boosts attack by 1.5x!
+                    Run over drops to collect them. <strong>♥ Health</strong> restores HP, <strong>⚡ Energy</strong> boosts attack 1.5x, <strong>💨 Speed</strong> boosts movement, <strong>🛡 Shield</strong> blocks the next hit, <strong>⚗ Type</strong> randomly changes your card's type!
                   </li>
                 </ul>
               </div>
