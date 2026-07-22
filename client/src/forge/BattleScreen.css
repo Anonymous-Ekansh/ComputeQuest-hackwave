@@ -1018,6 +1018,7 @@
   margin: 30px auto 0;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   text-align: left;
+  font-family: var(--font-main, 'Inter', sans-serif);
 }
 
 .premium-instructions h4 {
@@ -1046,6 +1047,7 @@
 }
 
 .instruction-label {
+  font-family: var(--font-heading);
   font-size: 0.8rem;
   color: #94a3b8;
   text-transform: uppercase;
@@ -1054,7 +1056,8 @@
 }
 
 .instruction-desc {
-  font-size: 0.95rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
   color: #f1f5f9;
 }
 
