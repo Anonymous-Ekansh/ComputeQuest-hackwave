@@ -942,3 +942,64 @@
   text-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
   font-weight: 900;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   NEW MECHANICS: CRIT, ULTIMATES, POWERUPS
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.floating-dmg.crit {
+  font-size: 1.6rem;
+  color: #ffaa00;
+  text-shadow: 0 0 10px rgba(255, 170, 0, 0.8);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.floating-dmg.ultimate {
+  font-size: 1.8rem;
+  color: #00f0ff;
+  text-shadow: 0 0 12px rgba(0, 240, 255, 0.8);
+  font-weight: 900;
+  letter-spacing: 2px;
+}
+
+.powerup {
+  position: absolute;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 14px;
+  animation: floatPowerup 2s infinite ease-in-out;
+  box-shadow: 0 0 15px currentColor;
+  z-index: 5;
+}
+
+.powerup.health {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.2);
+  border: 2px solid #22c55e;
+}
+
+.powerup.attack_boost {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.2);
+  border: 2px solid #ef4444;
+}
+
+@keyframes floatPowerup {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.fighter.frozen {
+  filter: hue-rotate(180deg) saturate(2) brightness(1.5);
+  animation: shiver 0.2s infinite;
+}
+
+@keyframes shiver {
+  0% { transform: translate(1px, 1px) }
+  50% { transform: translate(-1px, -1px) }
+  100% { transform: translate(1px, 1px) }
+}

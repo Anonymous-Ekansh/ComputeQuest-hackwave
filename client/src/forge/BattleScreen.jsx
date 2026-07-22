@@ -12,6 +12,8 @@ const ATTACK_RANGE = 80;
 const ATTACK_COOLDOWN = 1200;     
 const MANUAL_ATTACK_MULTIPLIER = 1.4;
 const MANUAL_ATTACK_COOLDOWN = 500; 
+const ULTIMATE_COOLDOWN = 10000;
+const POWERUP_SPAWN_RATE = 7000;
 const TICK_MS = 16;              
 const HINT_DURATION = 4000;      
 const HP_SCALE = 8;              
@@ -48,6 +50,9 @@ function buildFighter(card, team, idx, total) {
     hitTimer: 0,    
     lungeDir: 0,    
     floatingDmg: [],
+    lastUltimateAt: 0,
+    frozenUntil: 0,
+    boostUntil: 0,
   };
 }
 
@@ -72,8 +77,11 @@ export default function BattleScreen({
   const [confirmedData, setConfirmedData] = useState(null);
   const [toast, setToast] = useState(null);
 
+  const [powerups, setPowerups] = useState([]);
   const keysRef = useRef(new Set());
   const fightersRef = useRef([]);
+  const powerupsRef = useRef([]);
+  const lastPowerupTimeRef = useRef(0);
   const selectedIdxRef = useRef(0);
   const loopRef = useRef(null);
   const arenaRef = useRef(null);
@@ -82,6 +90,7 @@ export default function BattleScreen({
   const hasDeck = savedDeck && savedDeck.length === 4;
 
   useEffect(() => { fightersRef.current = fighters; }, [fighters]);
+  useEffect(() => { powerupsRef.current = powerups; }, [powerups]);
   useEffect(() => { selectedIdxRef.current = selectedIdx; }, [selectedIdx]);
   useEffect(() => { winnerRef.current = winner; }, [winner]);
 
@@ -91,6 +100,10 @@ export default function BattleScreen({
     function handleKeyDown(e) {
       const k = e.key.toLowerCase();
       keysRef.current.add(k);
+      if (k === 'shift' && !e.repeat) {
+        keysRef.current.shiftJustPressed = true;
+        e.preventDefault();
+      }
       if (k === ' ' && !e.repeat) {
         keysRef.current.spacebarJustPressed = true;
         e.preventDefault();
@@ -165,6 +178,9 @@ export default function BattleScreen({
     fightersRef.current = allFighters;
     setSelectedIdx(0);
     selectedIdxRef.current = 0;
+    setPowerups([]);
+    powerupsRef.current = [];
+    lastPowerupTimeRef.current = Date.now();
     setShowHint(true);
     setBattleState(STATES.BATTLING);
 
@@ -185,6 +201,20 @@ export default function BattleScreen({
 
       const spacePressed = keys.spacebarJustPressed;
       keys.spacebarJustPressed = false;
+      const shiftPressed = keys.shiftJustPressed;
+      keys.shiftJustPressed = false;
+
+      // Spawn Powerups
+      let currentPowerups = [...powerupsRef.current];
+      if (now - lastPowerupTimeRef.current >= POWERUP_SPAWN_RATE) {
+        lastPowerupTimeRef.current = now;
+        currentPowerups.push({
+          id: now,
+          x: 50 + Math.random() * (ARENA_W - 100),
+          y: 50 + Math.random() * (ARENA_H - 100),
+          type: Math.random() > 0.5 ? 'health' : 'attack_boost'
+        });
+      }
 
       const sel = updated[selIdx];
       if (sel && sel.team === 'player' && sel.alive) {
@@ -196,10 +226,54 @@ export default function BattleScreen({
         if (dx && dy) { dx *= 0.707; dy *= 0.707; }
         sel.x = Math.max(CHAR_SIZE / 2, Math.min(ARENA_W - CHAR_SIZE / 2, sel.x + dx));
         sel.y = Math.max(CHAR_SIZE / 2, Math.min(ARENA_H - CHAR_SIZE / 2, sel.y + dy));
+
+        // Ultimate Ability
+        if (shiftPressed && now - (sel.lastUltimateAt || 0) >= ULTIMATE_COOLDOWN) {
+           sel.lastUltimateAt = now;
+           const type = sel.card.type;
+           if (type === 'OVERCLOCK') {
+             // Blink forward
+             const blinkDist = 120;
+             const dirX = dx === 0 && dy === 0 ? 1 : dx; // default right if idle
+             const dirY = dx === 0 && dy === 0 ? 0 : dy;
+             const mag = Math.sqrt(dirX*dirX + dirY*dirY);
+             sel.x = Math.max(CHAR_SIZE / 2, Math.min(ARENA_W - CHAR_SIZE / 2, sel.x + (dirX/mag)*blinkDist));
+             sel.y = Math.max(CHAR_SIZE / 2, Math.min(ARENA_H - CHAR_SIZE / 2, sel.y + (dirY/mag)*blinkDist));
+             sel.floatingDmg.push({ value: 'BLINK!', id: now + Math.random(), createdAt: now, isUltimate: true });
+           } else if (type === 'COOLANT') {
+             // Freeze bots
+             updated.forEach(f => {
+               if (f.team === 'bot' && dist(sel, f) <= 120) {
+                 f.frozenUntil = now + 3000;
+               }
+             });
+             sel.floatingDmg.push({ value: 'FREEZE!', id: now + Math.random(), createdAt: now, isUltimate: true });
+           } else if (type === 'FIRMWARE') {
+             // Heal
+             sel.hp = Math.min(sel.maxHp, sel.hp + (sel.maxHp * 0.3));
+             sel.floatingDmg.push({ value: 'HEAL!', id: now + Math.random(), createdAt: now, isUltimate: true });
+           }
+        }
+
+        // Powerup collision
+        let i = currentPowerups.length;
+        while (i--) {
+          const p = currentPowerups[i];
+          if (dist(sel, p) < CHAR_SIZE) {
+            if (p.type === 'health') {
+              sel.hp = Math.min(sel.maxHp, sel.hp + (sel.maxHp * 0.2));
+              sel.floatingDmg.push({ value: '+HP', id: now + Math.random(), createdAt: now, isUltimate: true });
+            } else if (p.type === 'attack_boost') {
+              sel.boostUntil = now + 5000;
+              sel.floatingDmg.push({ value: 'ATK+', id: now + Math.random(), createdAt: now, isUltimate: true });
+            }
+            currentPowerups.splice(i, 1);
+          }
+        }
       }
 
       for (const bot of updated) {
-        if (bot.team !== 'bot' || !bot.alive) continue;
+        if (bot.team !== 'bot' || !bot.alive || now < bot.frozenUntil) continue;
         const targets = updated.filter(f => f.team === 'player' && f.alive);
         if (targets.length === 0) continue;
 
@@ -220,11 +294,12 @@ export default function BattleScreen({
 
         if (nearDist <= ATTACK_RANGE && now - bot.lastAttackAt >= ATTACK_COOLDOWN) {
           const damage = dmg(bot, nearest);
+          const isAdv = hasAdvantage(bot.card.type, nearest.card.type);
           nearest.hp = Math.max(0, nearest.hp - damage);
           nearest.hitTimer = now;
           bot.lastAttackAt = now;
           bot.lungeDir = Math.atan2(nearest.y - bot.y, nearest.x - bot.x);
-          nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now });
+          nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isCrit: isAdv });
           if (nearest.hp <= 0) nearest.alive = false;
         }
       }
@@ -247,12 +322,15 @@ export default function BattleScreen({
 
         if (isSelected && spacePressed) {
           if (nearDist <= ATTACK_RANGE && now - (pf.lastManualAttackAt || 0) >= MANUAL_ATTACK_COOLDOWN) {
-            const damage = Math.floor(dmg(pf, nearest) * MANUAL_ATTACK_MULTIPLIER);
+            let damage = Math.floor(dmg(pf, nearest) * MANUAL_ATTACK_MULTIPLIER);
+            if (now < pf.boostUntil) damage = Math.floor(damage * 1.5);
+            const isAdv = hasAdvantage(pf.card.type, nearest.card.type);
+            
             nearest.hp = Math.max(0, nearest.hp - damage);
             nearest.hitTimer = now;
             pf.lastManualAttackAt = now;
             pf.lungeDir = Math.atan2(nearest.y - pf.y, nearest.x - pf.x);
-            nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isManual: true });
+            nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isManual: true, isCrit: isAdv });
             if (nearest.hp <= 0) nearest.alive = false;
           } else {
             pf.whiffTimer = now;
@@ -299,6 +377,8 @@ export default function BattleScreen({
         socket.on('battle:result_confirmed', handler);
       }
 
+      setPowerups(currentPowerups);
+      powerupsRef.current = currentPowerups;
       setFighters(updated);
       fightersRef.current = updated;
     }, TICK_MS);
@@ -337,11 +417,16 @@ export default function BattleScreen({
               <button className="battle-start-btn" onClick={startBattle}>
                 Find Opponent
               </button>
-              <div className="battle-instructions" style={{ marginTop: '20px', fontSize: '0.9em', color: '#888' }}>
-                <h4>Controls</h4>
-                <p>WASD: Move</p>
-                <p>Spacebar: Attack</p>
-                <p>1 2 3 4: Switch Character</p>
+              <div className="battle-instructions" style={{ marginTop: '20px', fontSize: '0.9em', color: '#888', maxWidth: '400px', margin: '20px auto 0' }}>
+                <h4>Controls & Mechanics</h4>
+                <p><strong>WASD:</strong> Move &nbsp; | &nbsp; <strong>Spacebar:</strong> Manual Attack (1.4x DMG)</p>
+                <p><strong>1 2 3 4:</strong> Switch Character</p>
+                <p><strong>Shift:</strong> Ultimate Ability (10s Cooldown)</p>
+                <ul style={{ textAlign: 'left', marginTop: '10px', fontSize: '0.85em', background: 'rgba(0,0,0,0.2)', padding: '10px 20px', borderRadius: '4px' }}>
+                  <li><span style={{color: '#ffaa00'}}>Type Advantage:</span> Attacking a weaker type deals 1.5x DMG! (Overclock &gt; Coolant &gt; Firmware &gt; Overclock)</li>
+                  <li><span style={{color: '#00f0ff'}}>Ultimates:</span> Overclock Blinks, Coolant Freezes, Firmware Heals.</li>
+                  <li><span style={{color: '#22c55e'}}>Power-ups:</span> Collect drops on the floor to heal or boost your attack!</li>
+                </ul>
               </div>
               <div className="battle-advantage-diagram">
                 <h4>Element Advantage (+50% DMG)</h4>
@@ -445,6 +530,12 @@ export default function BattleScreen({
           <div className="arena-midline" />
           <div className="arena-frame" />
 
+          {powerups.map(p => (
+            <div key={p.id} className={`powerup ${p.type}`} style={{ left: p.x - 10, top: p.y - 10, width: 20, height: 20 }}>
+              {p.type === 'health' ? '♥' : '⚡'}
+            </div>
+          ))}
+
           {fighters.map((f, idx) => {
             const isSelected = f.team === 'player' && idx === selectedIdx;
             const isHit = f.hitTimer && now - f.hitTimer < 200;
@@ -474,7 +565,8 @@ export default function BattleScreen({
                   f.alive ? '' : 'dead',
                   isSelected ? 'selected' : '',
                   isHit ? 'hit' : '',
-                  isWhiffing ? 'whiff' : ''
+                  isWhiffing ? 'whiff' : '',
+                  now < (f.frozenUntil || 0) ? 'frozen' : ''
                 ].join(' ')}
                 style={{
                   left: f.x - CHAR_SIZE / 2 + lungeX,
@@ -508,10 +600,10 @@ export default function BattleScreen({
                   return (
                     <span
                       key={d.id}
-                      className={`floating-dmg ${d.isManual ? 'manual' : ''}`}
+                      className={`floating-dmg ${d.isManual ? 'manual' : ''} ${d.isCrit ? 'crit' : ''} ${d.isUltimate ? 'ultimate' : ''}`}
                       style={{ opacity, transform: `translateY(${yOff}px)` }}
                     >
-                      -{d.value}{d.isManual ? '!' : ''}
+                      {typeof d.value === 'number' ? `-${d.value}` : d.value}{d.isCrit && typeof d.value === 'number' ? ' CRIT!' : ''}{d.isManual && !d.isCrit && typeof d.value === 'number' ? '!' : ''}
                     </span>
                   );
                 })}
@@ -534,9 +626,9 @@ export default function BattleScreen({
             <span className="hint-sep">·</span>
             <span>Spacebar to attack</span>
             <span className="hint-sep">·</span>
-            <span>1/2/3/4 switch character</span>
+            <span>Shift for Ultimate</span>
             <span className="hint-sep">·</span>
-            <span>Click to select</span>
+            <span>1-4 switch</span>
           </div>
         )}
 
