@@ -1003,3 +1003,99 @@
   50% { transform: translate(-1px, -1px) }
   100% { transform: translate(1px, 1px) }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   PREMIUM INSTRUCTIONS UI
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.premium-instructions {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 700px;
+  margin: 30px auto 0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  text-align: left;
+}
+
+.premium-instructions h4 {
+  font-family: var(--font-heading);
+  color: #fff;
+  font-size: 1.2rem;
+  margin-top: 0;
+  margin-bottom: 16px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 8px;
+}
+
+.instructions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.instruction-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.instruction-label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.instruction-desc {
+  font-size: 0.95rem;
+  color: #f1f5f9;
+}
+
+.instruction-highlight {
+  color: #00f0ff;
+  font-weight: 600;
+}
+
+.mechanics-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mechanics-list li {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  border-left: 4px solid transparent;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.mechanics-list li:hover {
+  transform: translateX(4px);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mechanics-list li.mech-type { border-left-color: #ffaa00; }
+.mechanics-list li.mech-ult { border-left-color: #00f0ff; }
+.mechanics-list li.mech-pow { border-left-color: #22c55e; }
+
+.mech-title {
+  font-weight: 700;
+  display: block;
+  margin-bottom: 4px;
+}
+.mech-type .mech-title { color: #ffaa00; }
+.mech-ult .mech-title { color: #00f0ff; }
+.mech-pow .mech-title { color: #22c55e; }

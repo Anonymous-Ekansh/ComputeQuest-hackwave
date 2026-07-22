@@ -279,12 +279,19 @@ export default function BattleScreen({
 
         let nearest = targets[0];
         let nearDist = dist(bot, nearest);
+        let targetIsPowerup = false;
+        
         for (const t of targets) {
           const d = dist(bot, t);
-          if (d < nearDist) { nearest = t; nearDist = d; }
+          if (d < nearDist) { nearest = t; nearDist = d; targetIsPowerup = false; }
+        }
+        
+        for (const p of currentPowerups) {
+          const d = dist(bot, p);
+          if (d < nearDist && d < 200) { nearest = p; nearDist = d; targetIsPowerup = true; }
         }
 
-        if (nearDist > ATTACK_RANGE * 0.8) {
+        if (nearDist > (targetIsPowerup ? 10 : ATTACK_RANGE * 0.8)) {
           const angle = Math.atan2(nearest.y - bot.y, nearest.x - bot.x);
           bot.x += Math.cos(angle) * MOVE_SPEED;
           bot.y += Math.sin(angle) * MOVE_SPEED;
@@ -292,8 +299,53 @@ export default function BattleScreen({
           bot.y = Math.max(CHAR_SIZE / 2, Math.min(ARENA_H - CHAR_SIZE / 2, bot.y));
         }
 
-        if (nearDist <= ATTACK_RANGE && now - bot.lastAttackAt >= ATTACK_COOLDOWN) {
-          const damage = dmg(bot, nearest);
+        if (now - (bot.lastUltimateAt || 0) >= ULTIMATE_COOLDOWN && Math.random() < 0.05) {
+           const type = bot.card.type;
+           let used = false;
+           
+           if (type === 'OVERCLOCK' && nearDist > ATTACK_RANGE && !targetIsPowerup) {
+             const blinkDist = 120;
+             const angle = Math.atan2(nearest.y - bot.y, nearest.x - bot.x);
+             bot.x = Math.max(CHAR_SIZE / 2, Math.min(ARENA_W - CHAR_SIZE / 2, bot.x + Math.cos(angle)*blinkDist));
+             bot.y = Math.max(CHAR_SIZE / 2, Math.min(ARENA_H - CHAR_SIZE / 2, bot.y + Math.sin(angle)*blinkDist));
+             used = true;
+           } else if (type === 'COOLANT' && nearDist <= 120 && !targetIsPowerup) {
+             updated.forEach(f => {
+               if (f.team === 'player' && dist(bot, f) <= 120) {
+                 f.frozenUntil = now + 3000;
+               }
+             });
+             used = true;
+           } else if (type === 'FIRMWARE' && bot.hp < bot.maxHp * 0.5) {
+             bot.hp = Math.min(bot.maxHp, bot.hp + (bot.maxHp * 0.3));
+             used = true;
+           }
+           
+           if (used) {
+             bot.lastUltimateAt = now;
+             const ultText = type === 'OVERCLOCK' ? 'BLINK!' : type === 'COOLANT' ? 'FREEZE!' : 'HEAL!';
+             bot.floatingDmg.push({ value: ultText, id: now + Math.random(), createdAt: now, isUltimate: true });
+           }
+        }
+
+        let j = currentPowerups.length;
+        while (j--) {
+          const p = currentPowerups[j];
+          if (dist(bot, p) < CHAR_SIZE) {
+            if (p.type === 'health') {
+              bot.hp = Math.min(bot.maxHp, bot.hp + (bot.maxHp * 0.2));
+              bot.floatingDmg.push({ value: '+HP', id: now + Math.random(), createdAt: now, isUltimate: true });
+            } else if (p.type === 'attack_boost') {
+              bot.boostUntil = now + 5000;
+              bot.floatingDmg.push({ value: 'ATK+', id: now + Math.random(), createdAt: now, isUltimate: true });
+            }
+            currentPowerups.splice(j, 1);
+          }
+        }
+
+        if (!targetIsPowerup && nearDist <= ATTACK_RANGE && now - bot.lastAttackAt >= ATTACK_COOLDOWN) {
+          let damage = dmg(bot, nearest);
+          if (now < (bot.boostUntil || 0)) damage = Math.floor(damage * 1.5);
           const isAdv = hasAdvantage(bot.card.type, nearest.card.type);
           nearest.hp = Math.max(0, nearest.hp - damage);
           nearest.hitTimer = now;
@@ -417,15 +469,41 @@ export default function BattleScreen({
               <button className="battle-start-btn" onClick={startBattle}>
                 Find Opponent
               </button>
-              <div className="battle-instructions" style={{ marginTop: '20px', fontSize: '0.9em', color: '#888', maxWidth: '400px', margin: '20px auto 0' }}>
+              <div className="premium-instructions">
                 <h4>Controls & Mechanics</h4>
-                <p><strong>WASD:</strong> Move &nbsp; | &nbsp; <strong>Spacebar:</strong> Manual Attack (1.4x DMG)</p>
-                <p><strong>1 2 3 4:</strong> Switch Character</p>
-                <p><strong>Shift:</strong> Ultimate Ability (10s Cooldown)</p>
-                <ul style={{ textAlign: 'left', marginTop: '10px', fontSize: '0.85em', background: 'rgba(0,0,0,0.2)', padding: '10px 20px', borderRadius: '4px' }}>
-                  <li><span style={{color: '#ffaa00'}}>Type Advantage:</span> Attacking a weaker type deals 1.5x DMG! (Overclock &gt; Coolant &gt; Firmware &gt; Overclock)</li>
-                  <li><span style={{color: '#00f0ff'}}>Ultimates:</span> Overclock Blinks, Coolant Freezes, Firmware Heals.</li>
-                  <li><span style={{color: '#22c55e'}}>Power-ups:</span> Collect drops on the floor to heal or boost your attack!</li>
+                
+                <div className="instructions-grid">
+                  <div className="instruction-item">
+                    <span className="instruction-label">Movement</span>
+                    <span className="instruction-desc">Use <span className="instruction-highlight">W A S D</span> to navigate the arena</span>
+                  </div>
+                  <div className="instruction-item">
+                    <span className="instruction-label">Attack</span>
+                    <span className="instruction-desc">Press <span className="instruction-highlight">Spacebar</span> for a 1.4x DMG manual strike</span>
+                  </div>
+                  <div className="instruction-item">
+                    <span className="instruction-label">Swap Character</span>
+                    <span className="instruction-desc">Press <span className="instruction-highlight">1 2 3 4</span> to change your active card</span>
+                  </div>
+                  <div className="instruction-item">
+                    <span className="instruction-label">Ultimate Ability</span>
+                    <span className="instruction-desc">Press <span className="instruction-highlight">Shift</span> (10s cooldown)</span>
+                  </div>
+                </div>
+
+                <ul className="mechanics-list">
+                  <li className="mech-type">
+                    <span className="mech-title">Type Advantage (1.5x DMG)</span>
+                    Exploit weaknesses for CRIT damage! (Overclock &gt; Coolant &gt; Firmware &gt; Overclock)
+                  </li>
+                  <li className="mech-ult">
+                    <span className="mech-title">Unique Ultimates</span>
+                    <strong>Overclock:</strong> Blinks forward. <strong>Coolant:</strong> Freezes enemies. <strong>Firmware:</strong> Instantly heals.
+                  </li>
+                  <li className="mech-pow">
+                    <span className="mech-title">Arena Power-ups</span>
+                    Run over drops to collect them. <strong>♥ Health</strong> restores HP, <strong>⚡ Energy</strong> boosts attack by 1.5x!
+                  </li>
                 </ul>
               </div>
               <div className="battle-advantage-diagram">
