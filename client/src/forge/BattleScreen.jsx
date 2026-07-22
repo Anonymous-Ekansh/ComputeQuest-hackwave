@@ -78,6 +78,7 @@ export default function BattleScreen({
   const [toast, setToast] = useState(null);
 
   const [powerups, setPowerups] = useState([]);
+  const [roundHistory, setRoundHistory] = useState([]); // post-battle breakdown
   const keysRef = useRef(new Set());
   const fightersRef = useRef([]);
   const powerupsRef = useRef([]);
@@ -86,6 +87,7 @@ export default function BattleScreen({
   const loopRef = useRef(null);
   const arenaRef = useRef(null);
   const winnerRef = useRef(null);
+  const roundHistoryRef = useRef([]);
 
   const hasDeck = savedDeck && savedDeck.length === 4;
 
@@ -166,6 +168,8 @@ export default function BattleScreen({
     setServerConfirmed(false);
     setConfirmedData(null);
     setToast(null);
+    setRoundHistory([]);
+    roundHistoryRef.current = [];
     setBattleState(STATES.READY);
   }, [hasDeck, savedDeck, trophies, localUpgrades]);
 
@@ -204,15 +208,16 @@ export default function BattleScreen({
       const shiftPressed = keys.shiftJustPressed;
       keys.shiftJustPressed = false;
 
-      // Spawn Powerups
+      // Spawn Powerups (5 types)
       let currentPowerups = [...powerupsRef.current];
       if (now - lastPowerupTimeRef.current >= POWERUP_SPAWN_RATE) {
         lastPowerupTimeRef.current = now;
+        const POWERUP_TYPES = ['health', 'attack_boost', 'speed_boost', 'shield', 'type_switch'];
         currentPowerups.push({
           id: now,
           x: 50 + Math.random() * (ARENA_W - 100),
           y: 50 + Math.random() * (ARENA_H - 100),
-          type: Math.random() > 0.5 ? 'health' : 'attack_boost'
+          type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)]
         });
       }
 
@@ -255,7 +260,7 @@ export default function BattleScreen({
            }
         }
 
-        // Powerup collision
+        // Powerup collision (player)
         let i = currentPowerups.length;
         while (i--) {
           const p = currentPowerups[i];
@@ -266,6 +271,16 @@ export default function BattleScreen({
             } else if (p.type === 'attack_boost') {
               sel.boostUntil = now + 5000;
               sel.floatingDmg.push({ value: 'ATK+', id: now + Math.random(), createdAt: now, isUltimate: true });
+            } else if (p.type === 'speed_boost') {
+              sel.speedBoostUntil = now + 4000;
+              sel.floatingDmg.push({ value: 'SPD+', id: now + Math.random(), createdAt: now, isUltimate: true });
+            } else if (p.type === 'shield') {
+              sel.shieldUntil = now + 3000;
+              sel.floatingDmg.push({ value: 'SHIELD!', id: now + Math.random(), createdAt: now, isUltimate: true });
+            } else if (p.type === 'type_switch') {
+              const types = ['OVERCLOCK', 'COOLANT', 'FIRMWARE'];
+              sel.card = { ...sel.card, type: types[Math.floor(Math.random() * types.length)] };
+              sel.floatingDmg.push({ value: '⚗ TYPE!', id: now + Math.random(), createdAt: now, isUltimate: true });
             }
             currentPowerups.splice(i, 1);
           }
@@ -277,11 +292,15 @@ export default function BattleScreen({
         const targets = updated.filter(f => f.team === 'player' && f.alive);
         if (targets.length === 0) continue;
 
-        let nearest = targets[0];
+        // Type-aware targeting: prefer targets the bot has type advantage over
+        const advantageTargets = targets.filter(t => hasAdvantage(bot.card.type, t.card.type));
+        const preferredTargets = advantageTargets.length > 0 ? advantageTargets : targets;
+
+        let nearest = preferredTargets[0];
         let nearDist = dist(bot, nearest);
         let targetIsPowerup = false;
         
-        for (const t of targets) {
+        for (const t of preferredTargets) {
           const d = dist(bot, t);
           if (d < nearDist) { nearest = t; nearDist = d; targetIsPowerup = false; }
         }
@@ -338,21 +357,34 @@ export default function BattleScreen({
             } else if (p.type === 'attack_boost') {
               bot.boostUntil = now + 5000;
               bot.floatingDmg.push({ value: 'ATK+', id: now + Math.random(), createdAt: now, isUltimate: true });
+            } else if (p.type === 'speed_boost') {
+              bot.speedBoostUntil = now + 4000;
+              bot.floatingDmg.push({ value: 'SPD+', id: now + Math.random(), createdAt: now, isUltimate: true });
+            } else if (p.type === 'shield') {
+              bot.shieldUntil = now + 3000;
+              bot.floatingDmg.push({ value: 'SHIELD!', id: now + Math.random(), createdAt: now, isUltimate: true });
             }
             currentPowerups.splice(j, 1);
           }
         }
 
         if (!targetIsPowerup && nearDist <= ATTACK_RANGE && now - bot.lastAttackAt >= ATTACK_COOLDOWN) {
-          let damage = dmg(bot, nearest);
-          if (now < (bot.boostUntil || 0)) damage = Math.floor(damage * 1.5);
-          const isAdv = hasAdvantage(bot.card.type, nearest.card.type);
-          nearest.hp = Math.max(0, nearest.hp - damage);
-          nearest.hitTimer = now;
-          bot.lastAttackAt = now;
-          bot.lungeDir = Math.atan2(nearest.y - bot.y, nearest.x - bot.x);
-          nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isCrit: isAdv });
-          if (nearest.hp <= 0) nearest.alive = false;
+          // Shield absorbs one attack
+          if (now < (nearest.shieldUntil || 0)) {
+            nearest.shieldUntil = 0;
+            nearest.floatingDmg.push({ value: 'BLOCKED!', id: now + Math.random(), createdAt: now, isUltimate: true });
+            bot.lastAttackAt = now;
+          } else {
+            let damage = dmg(bot, nearest);
+            if (now < (bot.boostUntil || 0)) damage = Math.floor(damage * 1.5);
+            const isAdv = hasAdvantage(bot.card.type, nearest.card.type);
+            nearest.hp = Math.max(0, nearest.hp - damage);
+            nearest.hitTimer = now;
+            bot.lastAttackAt = now;
+            bot.lungeDir = Math.atan2(nearest.y - bot.y, nearest.x - bot.x);
+            nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isCrit: isAdv });
+            if (nearest.hp <= 0) nearest.alive = false;
+          }
         }
       }
 
@@ -371,19 +403,26 @@ export default function BattleScreen({
         }
 
         const isSelected = (i === selIdx);
+        // Apply speed boost to movement (already applied above via MOVE_SPEED — boost handled at move time)
 
         if (isSelected && spacePressed) {
           if (nearDist <= ATTACK_RANGE && now - (pf.lastManualAttackAt || 0) >= MANUAL_ATTACK_COOLDOWN) {
-            let damage = Math.floor(dmg(pf, nearest) * MANUAL_ATTACK_MULTIPLIER);
-            if (now < pf.boostUntil) damage = Math.floor(damage * 1.5);
-            const isAdv = hasAdvantage(pf.card.type, nearest.card.type);
-            
-            nearest.hp = Math.max(0, nearest.hp - damage);
-            nearest.hitTimer = now;
-            pf.lastManualAttackAt = now;
-            pf.lungeDir = Math.atan2(nearest.y - pf.y, nearest.x - pf.x);
-            nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isManual: true, isCrit: isAdv });
-            if (nearest.hp <= 0) nearest.alive = false;
+            // Shield absorbs one attack
+            if (now < (nearest.shieldUntil || 0)) {
+              nearest.shieldUntil = 0;
+              nearest.floatingDmg.push({ value: 'BLOCKED!', id: now + Math.random(), createdAt: now, isUltimate: true });
+              pf.lastManualAttackAt = now;
+            } else {
+              let damage = Math.floor(dmg(pf, nearest) * MANUAL_ATTACK_MULTIPLIER);
+              if (now < pf.boostUntil) damage = Math.floor(damage * 1.5);
+              const isAdv = hasAdvantage(pf.card.type, nearest.card.type);
+              nearest.hp = Math.max(0, nearest.hp - damage);
+              nearest.hitTimer = now;
+              pf.lastManualAttackAt = now;
+              pf.lungeDir = Math.atan2(nearest.y - pf.y, nearest.x - pf.x);
+              nearest.floatingDmg.push({ value: damage, id: now + Math.random(), createdAt: now, isManual: true, isCrit: isAdv });
+              if (nearest.hp <= 0) nearest.alive = false;
+            }
           } else {
             pf.whiffTimer = now;
           }
@@ -405,6 +444,27 @@ export default function BattleScreen({
       if (playersAlive === 0 || botsAlive === 0) {
         const w = botsAlive === 0 ? 'player' : 'bot';
         setWinner(w);
+
+        // Build round breakdown from final fighter states
+        const playerFighters = updated.filter(f => f.team === 'player');
+        const botFighters = updated.filter(f => f.team === 'bot');
+        const history = playerFighters.map((pf, i) => {
+          const bf = botFighters[i] || botFighters[0];
+          const playerHpPct = Math.round((pf.hp / pf.maxHp) * 100);
+          const botHpPct = bf ? Math.round((bf.hp / bf.maxHp) * 100) : 0;
+          return {
+            round: i + 1,
+            playerCard: pf.card.name,
+            playerType: pf.card.type,
+            playerHpPct,
+            botCard: bf ? bf.card.name : '—',
+            botType: bf ? bf.card.type : '—',
+            botHpPct,
+            survived: pf.alive,
+          };
+        });
+        roundHistoryRef.current = history;
+        setRoundHistory(history);
 
         socket.emit('battle:report_result', {
           won: w === 'player',
@@ -502,7 +562,7 @@ export default function BattleScreen({
                   </li>
                   <li className="mech-pow">
                     <span className="mech-title">Arena Power-ups</span>
-                    Run over drops to collect them. <strong>♥ Health</strong> restores HP, <strong>⚡ Energy</strong> boosts attack by 1.5x!
+                    Run over drops to collect them. <strong>♥ Health</strong> restores HP, <strong>⚡ Energy</strong> boosts attack 1.5x, <strong>💨 Speed</strong> boosts movement, <strong>🛡 Shield</strong> blocks the next hit, <strong>⚗ Type</strong> randomly changes your card's type!
                   </li>
                 </ul>
               </div>
@@ -610,7 +670,7 @@ export default function BattleScreen({
 
           {powerups.map(p => (
             <div key={p.id} className={`powerup ${p.type}`} style={{ left: p.x - 10, top: p.y - 10, width: 20, height: 20 }}>
-              {p.type === 'health' ? '♥' : '⚡'}
+              {p.type === 'health' ? '♥' : p.type === 'attack_boost' ? '⚡' : p.type === 'speed_boost' ? '💨' : p.type === 'shield' ? '🛡' : '⚗'}
             </div>
           ))}
 
@@ -774,6 +834,41 @@ export default function BattleScreen({
           </div>
 
           {toast && <div className="battle-toast">{toast}</div>}
+
+          {/* Round-by-round breakdown */}
+          {roundHistory.length > 0 && (
+            <div style={{ margin: '16px 0', padding: '12px 16px', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid #334155' }}>
+              <p style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#64748b', marginBottom: '10px' }}>Card Breakdown</p>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', color: '#cbd5e1' }}>
+                <thead>
+                  <tr style={{ color: '#475569', borderBottom: '1px solid #1e293b' }}>
+                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>#</th>
+                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>Your Card</th>
+                    <th style={{ textAlign: 'right', padding: '4px 6px' }}>HP Left</th>
+                    <th style={{ textAlign: 'left', padding: '4px 6px', paddingLeft: '16px' }}>Bot Card</th>
+                    <th style={{ textAlign: 'right', padding: '4px 6px' }}>HP Left</th>
+                    <th style={{ textAlign: 'center', padding: '4px 6px' }}>Survived</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roundHistory.map(r => (
+                    <tr key={r.round} style={{ borderBottom: '1px solid #1e293b' }}>
+                      <td style={{ padding: '5px 6px', color: '#475569' }}>{r.round}</td>
+                      <td style={{ padding: '5px 6px' }}>
+                        <span style={{ color: r.playerType === 'OVERCLOCK' ? '#f97316' : r.playerType === 'COOLANT' ? '#06b6d4' : '#a855f7' }}>●</span> {r.playerCard}
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '5px 6px', color: r.playerHpPct > 50 ? '#22c55e' : r.playerHpPct > 20 ? '#f59e0b' : '#ef4444' }}>{r.playerHpPct}%</td>
+                      <td style={{ padding: '5px 6px', paddingLeft: '16px' }}>
+                        <span style={{ color: r.botType === 'OVERCLOCK' ? '#f97316' : r.botType === 'COOLANT' ? '#06b6d4' : '#a855f7' }}>●</span> {r.botCard}
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '5px 6px', color: r.botHpPct > 50 ? '#22c55e' : r.botHpPct > 20 ? '#f59e0b' : '#ef4444' }}>{r.botHpPct}%</td>
+                      <td style={{ textAlign: 'center', padding: '5px 6px' }}>{r.survived ? '✓' : '✗'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           <div className="result-actions">
             <button className="battle-again-btn" onClick={startBattle}>

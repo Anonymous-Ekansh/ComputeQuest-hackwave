@@ -80,11 +80,15 @@ export function simulateBattle(playerDeck, botDeck) {
   return { rounds, playerWins, botWins, winner: matchWinner };
 }
 
-// Bot tiers
+// Bot tiers — must mirror shared/bots.js exactly
 export const BOT_TIERS = [
-  { name: 'Scrapyard Bot', minTrophies: 0, maxTrophies: 9, cardIds: ['oc_surge', 'co_cryo', 'fw_patch', 'oc_blitz'] },
-  { name: 'Factory Bot', minTrophies: 10, maxTrophies: 29, cardIds: ['oc_nova', 'co_flow', 'fw_compile', 'co_cryo'] },
-  { name: 'Overlord Bot', minTrophies: 30, maxTrophies: Infinity, cardIds: ['oc_quantum', 'co_absolute', 'fw_genesis', 'fw_kernel'] },
+  { name: 'Scrapyard Bot', minTrophies: 0,   maxTrophies: 9,        cardIds: ['oc_surge', 'co_cryo', 'fw_patch', 'oc_blitz'] },
+  { name: 'Assembly Bot',  minTrophies: 10,  maxTrophies: 24,       cardIds: ['oc_nova', 'co_flow', 'fw_compile', 'co_cryo'] },
+  { name: 'Factory Bot',   minTrophies: 25,  maxTrophies: 44,       cardIds: ['oc_nova', 'co_glacier', 'fw_kernel', 'co_liquid'] },
+  { name: 'Warden Bot',    minTrophies: 45,  maxTrophies: 69,       cardIds: ['oc_quantum', 'co_glacier', 'fw_compile', 'fw_kernel'] },
+  { name: 'Titan Bot',     minTrophies: 70,  maxTrophies: 99,       cardIds: ['oc_quantum', 'co_absolute', 'fw_genesis', 'oc_hyper'] },
+  { name: 'Overlord Bot',  minTrophies: 100, maxTrophies: 149,      cardIds: ['oc_quantum', 'co_absolute', 'fw_genesis', 'fw_sentinel'] },
+  { name: 'Apex Bot',      minTrophies: 150, maxTrophies: Infinity, cardIds: ['oc_hyper', 'co_absolute', 'fw_sentinel', 'fw_genesis'] },
 ];
 
 export function getBotTier(trophies) {
